@@ -8,7 +8,7 @@ spring:
   main:
     web-application-type: reactive
   config:
-    import: optional:configserver:http://localhost:8888
+    import: ${SPRING_CONFIG_IMPORT:optional:configserver:http://localhost:8888}
   cloud:
     gateway:
       discovery:
@@ -165,7 +165,7 @@ app:
 eureka:
   client:
     service-url:
-      defaultZone: http://localhost:8761/eureka/
+      defaultZone: ${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:http://localhost:8761/eureka/}
     register-with-eureka: true
     fetch-registry: true
   instance:
