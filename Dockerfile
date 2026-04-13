@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
-# Default Dockerfile at repo root for hosts that only look for ./Dockerfile (e.g. some Railway setups).
-# Prefer configuring `dockerfilePath` in railway.toml to services/<name>/Dockerfile to avoid drift.
+# Repo root Dockerfile: Railway’s default detector looks here first. Kept in sync with
+# services/api-gateway/Dockerfile; for other services point railway.toml at services/<name>/Dockerfile.
 #
 # Default build: API gateway (port 8080). For social-service, copy services/social-service/Dockerfile here
 # or point Railway "Dockerfile path" to services/social-service/Dockerfile.

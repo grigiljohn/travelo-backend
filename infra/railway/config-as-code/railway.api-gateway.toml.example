@@ -4,7 +4,8 @@
 
 [build]
 builder = "DOCKERFILE"
-dockerfilePath = "services/api-gateway/Dockerfile"
+# Repo root Dockerfile matches services/api-gateway/Dockerfile; root path matches Railway defaults.
+dockerfilePath = "Dockerfile"
 watchPatterns = ["services/api-gateway/**", "libs/**", "pom.xml"]
 
 [deploy]

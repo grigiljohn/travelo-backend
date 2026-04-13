@@ -169,9 +169,10 @@ Railway **Railpack** / **Nixpacks** auto-detected Java and tried to run somethin
 **Fix:**
 
 1. In Railway → your service → **Settings** → set **Builder** to **Dockerfile** (not Railpack / Nixpacks).
-2. Set **Dockerfile path** to e.g. `services/api-gateway/Dockerfile` (or the service you want), **Root directory** empty (monorepo root).
-3. **Remove** any custom **Start Command** / **Deploy → Custom start command** (must be empty so the image `ENTRYPOINT` runs: `java -jar /app/app.jar`).
-4. Commit the repo-root **`railway.toml`** in this repo — it pins `[build] builder = "DOCKERFILE"` and `dockerfilePath` so new environments do not fall back to Railpack.
+2. Set **Dockerfile path** to `Dockerfile` (repo root; same build as `services/api-gateway/Dockerfile`) or to `services/<service>/Dockerfile`, **Root directory** empty (monorepo root). If you must set a non-root **Root directory**, Railway does **not** auto-load `railway.toml` from the repo root — under **Settings → Config as code**, set the file path to **`/railway.toml`** (absolute from repository root), or duplicate a minimal `railway.toml` inside that directory with `builder = "DOCKERFILE"` and the correct `dockerfilePath`.
+3. **Remove** any custom **Start Command** / **Deploy → Custom start command** (must be empty so the image `ENTRYPOINT` runs: `java -jar /app/app.jar`). On the deployment details page, confirm the effective **Config source** shows your config file and **Builder: DOCKERFILE**; if it still says Railpack, the checked-in config is not applied to this service.
+4. Optional fallback: add a service variable **`RAILWAY_DOCKERFILE_PATH=Dockerfile`** (or the path to the Dockerfile you use) so Railway resolves the image build even when detection misbehaves.
+5. Commit the repo-root **`railway.toml`** in this repo — it pins `[build] builder = "DOCKERFILE"` and `dockerfilePath` so new environments do not fall back to Railpack.
 
 Rebuild and redeploy.
 

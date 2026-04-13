@@ -1,8 +1,9 @@
-# Force Docker image build (avoids Railpack/Nixpacks running `java -jar target/*jar` from repo root).
-# To deploy a different service, change `dockerfilePath` to e.g. `services/social-service/Dockerfile`.
+# Force Docker image build (avoids Railpack running `java -jar target/*jar` from repo root).
+# Root `Dockerfile` matches `services/api-gateway/Dockerfile` (API gateway). For another JVM
+# service, set `dockerfilePath` to e.g. `services/social-service/Dockerfile`.
 [build]
 builder = "DOCKERFILE"
-dockerfilePath = "services/api-gateway/Dockerfile"
+dockerfilePath = "Dockerfile"
 
 [deploy]
 # Do not set startCommand here or in the Railway UI — use the image ENTRYPOINT (java -jar /app/app.jar).
