@@ -60,7 +60,8 @@ public class MessageBroadcastService {
         }
         try {
             Map<String, Object> map = objectMapper.convertValue(dto, new TypeReference<Map<String, Object>>() {});
-            broadcastMessageToConversation(dto.getConversationId().toString(), map, dto.getSenderId());
+            // Deliver to all participants including sender so inbox / other devices stay in sync (client dedupes by message id).
+            broadcastMessageToConversation(dto.getConversationId().toString(), map, null);
         } catch (Exception e) {
             logger.error("broadcastPersistedMessage failed: {}", e.getMessage(), e);
         }

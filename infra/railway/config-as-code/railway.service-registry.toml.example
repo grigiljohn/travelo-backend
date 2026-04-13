@@ -1,0 +1,9 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "registry/service-registry/Dockerfile"
+watchPatterns = ["registry/service-registry/**", "libs/**", "pom.xml"]
+
+[deploy]
+healthcheckPath = "/actuator/health"
+healthcheckTimeout = 120
+restartPolicyType = "ON_FAILURE"

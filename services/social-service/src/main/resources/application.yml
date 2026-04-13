@@ -1,5 +1,5 @@
 server:
-  port: ${SOCIAL_SERVICE_PORT:8096}
+  port: ${PORT:${SOCIAL_SERVICE_PORT:8096}}
 
 spring:
   application:

@@ -1,0 +1,13 @@
+# Rename to railway.toml at repo ROOT only for the Railway service that runs the API gateway,
+# OR paste equivalent settings in Railway Dashboard → Settings → Config-as-code.
+# Build context must be the monorepo root (parent of services/).
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "services/api-gateway/Dockerfile"
+watchPatterns = ["services/api-gateway/**", "libs/**", "pom.xml"]
+
+[deploy]
+healthcheckPath = "/actuator/health"
+healthcheckTimeout = 120
+restartPolicyType = "ON_FAILURE"

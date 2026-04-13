@@ -14,6 +14,8 @@ public class CreateCommunityRequest {
     /** "public" or "private" */
     private String visibility;
     private String city;
+    /** User ids to add as members at creation time (friends circle). */
+    private List<String> inviteUserIds = new ArrayList<>();
 
     public String getName() {
         return name;
@@ -53,5 +55,13 @@ public class CreateCommunityRequest {
 
     public void setCity(String city) {
         this.city = city;
+    }
+
+    public List<String> getInviteUserIds() {
+        return inviteUserIds;
+    }
+
+    public void setInviteUserIds(List<String> inviteUserIds) {
+        this.inviteUserIds = inviteUserIds != null ? inviteUserIds : new ArrayList<>();
     }
 }

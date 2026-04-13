@@ -138,6 +138,18 @@ public class CircleCommunityService {
         c.memberIds.add(user);
         c.ownerId = user;
         c.lastActivity = "Just now";
+        if (req.getInviteUserIds() != null) {
+            for (String invitee : req.getInviteUserIds()) {
+                if (invitee == null) {
+                    continue;
+                }
+                String x = invitee.trim();
+                if (x.isEmpty() || x.equals(user)) {
+                    continue;
+                }
+                c.memberIds.add(x);
+            }
+        }
         communities.put(id, c);
         return toDto(c, user);
     }

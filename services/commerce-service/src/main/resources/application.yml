@@ -1,5 +1,5 @@
 server:
-  port: ${COMMERCE_SERVICE_PORT:8097}
+  port: ${PORT:${COMMERCE_SERVICE_PORT:8097}}
 
 spring:
   application:
