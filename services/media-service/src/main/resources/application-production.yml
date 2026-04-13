@@ -1,0 +1,58 @@
+# Production configuration for media-service
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+      probes:
+        enabled: true
+    prometheus:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    tags:
+      service: media-service
+      environment: production
+
+# Resilience4j for S3 operations
+resilience4j:
+  circuitbreaker:
+    instances:
+      s3-upload:
+        registerHealthIndicator: true
+        slidingWindowSize: 50
+        minimumNumberOfCalls: 5
+        permittedNumberOfCallsInHalfOpenState: 2
+        waitDurationInOpenState: 30s
+        failureRateThreshold: 60
+        slowCallRateThreshold: 100
+        slowCallDurationThreshold: 10s
+        recordExceptions:
+          - com.amazonaws.SdkClientException
+          - java.io.IOException
+          - java.util.concurrent.TimeoutException
+  retry:
+    instances:
+      s3-upload:
+        maxAttempts: 3
+        waitDuration: 1s
+        enableExponentialBackoff: true
+        exponentialBackoffMultiplier: 2
+  timelimiter:
+    instances:
+      s3-upload:
+        timeoutDuration: 30s
+
+# Rate Limiting Configuration
+app:
+  rate-limit:
+    enabled: true
+    default-rate: 50  # uploads per minute
+    per-user-rate: 100
+

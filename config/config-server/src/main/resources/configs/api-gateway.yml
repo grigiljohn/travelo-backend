@@ -1,0 +1,4 @@
+travelo:
+  gateway:
+    cors:
+      allowed-origins: "http://localhost:3000"

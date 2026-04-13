@@ -1,0 +1,421 @@
+services:
+  config-server:
+    build:
+      context: ..
+      dockerfile: config/config-server/Dockerfile
+    ports:
+      - "8888:8888"
+    environment:
+      - SPRING_PROFILES_ACTIVE=native
+    networks:
+      - travelo-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8888/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+  service-registry:
+    depends_on:
+      config-server:
+        condition: service_healthy
+    build:
+      context: ..
+      dockerfile: registry/service-registry/Dockerfile
+    ports:
+      - "8761:8761"
+    environment:
+      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888
+    networks:
+      - travelo-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8761/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  api-gateway:
+    depends_on:
+      config-server:
+        condition: service_healthy
+      service-registry:
+        condition: service_healthy
+    build:
+      context: ..
+      dockerfile: services/api-gateway/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888
+      - IDENTITY_SERVICE_URI=http://identity-service:8081
+      - DISCOVERY_SERVICE_URI=http://discovery-service:8088
+    networks:
+      - travelo-net
+
+  identity-service:
+    depends_on:
+      config-server:
+        condition: service_healthy
+      service-registry:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    build:
+      context: ..
+      dockerfile: services/identity-service/Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888
+      - IDENTITY_SERVICE_PORT=8081
+      - POSTGRES_URL=jdbc:postgresql://postgres:5432/travelo_auth
+      - POSTGRES_USERNAME=travelo
+      - POSTGRES_PASSWORD=travelo
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    networks:
+      - travelo-net
+
+  social-service:
+    depends_on:
+      config-server:
+        condition: service_healthy
+      service-registry:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+      media-service:
+        condition: service_started
+      commerce-service:
+        condition: service_started
+    build:
+      context: ..
+      dockerfile: services/social-service/Dockerfile
+    ports:
+      - "8096:8096"
+    environment:
+      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888
+      - SOCIAL_SERVICE_PORT=8096
+      - POSTGRES_URL=jdbc:postgresql://postgres:5432/travelo_posts
+      - POSTGRES_USERNAME=travelo
+      - POSTGRES_PASSWORD=travelo
+      - STORY_DATASOURCE_URL=jdbc:postgresql://postgres:5432/travelo_stories
+      - STORY_DATASOURCE_USERNAME=travelo
+      - STORY_DATASOURCE_PASSWORD=travelo
+      - REEL_DATASOURCE_URL=jdbc:postgresql://postgres:5432/travelo_reels
+      - REEL_DATASOURCE_USERNAME=travelo
+      - REEL_DATASOURCE_PASSWORD=travelo
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - MEDIA_SERVICE_URL=http://media-service:8084
+      - INTERNAL_POST_SERVICE_URL=http://social-service:8096
+      - INTERNAL_STORY_SERVICE_URL=http://social-service:8096
+      - AD_SERVICE_URL=http://commerce-service:8097
+      - USER_SERVICE_URL=http://identity-service:8081
+      - ANALYTICS_SERVICE_URL=http://platform-service:8099
+      - AI_ORCHESTRATOR_SERVICE_URL=http://platform-service:8099
+    networks:
+      - travelo-net
+    restart: unless-stopped
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - travelo-net
+    restart: unless-stopped
+
+  kafka:
+    depends_on:
+      - zookeeper
+    image: confluentinc/cp-kafka:7.5.0
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - travelo-net
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    networks:
+      - travelo-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    networks:
+      - travelo-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  media-service:
+    depends_on:
+      config-server:
+        condition: service_healthy
+      service-registry:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+    build:
+      context: ..
+      dockerfile: services/media-service/Dockerfile
+    ports:
+      - "8084:8084"
+    environment:
+      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/travelo_media
+      - SPRING_DATASOURCE_USERNAME=travelo
+      - SPRING_DATASOURCE_PASSWORD=travelo
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - MEDIA_AWS_REGION=ap-south-1
+      - MEDIA_S3_BUCKET=travelo-posts-main
+      - MEDIA_S3_UPLOAD_PREFIX=${MEDIA_S3_UPLOAD_PREFIX:-uploads}
+      - AWS_ACCESS_KEY_ID=AKIAZYV45RNGLF4M6VWO
+      - AWS_SECRET_ACCESS_KEY=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
+    networks:
+      - travelo-net
+    restart: unless-stopped
+
+  commerce-service:
+    depends_on:
+      config-server:
+        condition: service_healthy
+      service-registry:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      media-service:
+        condition: service_started
+    build:
+      context: ..
+      dockerfile: services/commerce-service/Dockerfile
+    ports:
+      - "8097:8097"
+    environment:
+      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888
+      - COMMERCE_SERVICE_PORT=8097
+      - SHOP_POSTGRES_URL=jdbc:postgresql://postgres:5432/travelo_shops
+      - SHOP_POSTGRES_USERNAME=travelo
+      - SHOP_POSTGRES_PASSWORD=travelo
+      - AD_POSTGRES_URL=jdbc:postgresql://postgres:5432/travelo_ads
+      - AD_POSTGRES_USERNAME=travelo
+      - AD_POSTGRES_PASSWORD=travelo
+      - MEDIA_SERVICE_URL=http://media-service:8084
+      - INTERNAL_AD_SERVICE_URL=http://commerce-service:8097
+    networks:
+      - travelo-net
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.49.1
+    depends_on:
+      - social-service
+      - media-service
+      - commerce-service
+    ports:
+      - "9090:9090"
+    volumes:
+      - ../monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+    networks:
+      - travelo-net
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:10.2.3
+    depends_on:
+      - prometheus
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_DEFAULT_THEME=light
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    networks:
+      - travelo-net
+    restart: unless-stopped
+
+  realtime-service:
+    depends_on:
+      config-server:
+        condition: service_healthy
+      service-registry:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+    build:
+      context: ..
+      dockerfile: services/realtime-service/Dockerfile
+    ports:
+      - "8098:8098"
+    environment:
+      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888
+      - REALTIME_SERVICE_PORT=8098
+      - MESSAGING_POSTGRES_HOST=postgres
+      - MESSAGING_POSTGRES_PORT=5432
+      - MESSAGING_POSTGRES_DB=travelo_messaging
+      - MESSAGING_POSTGRES_USER=travelo
+      - MESSAGING_POSTGRES_PASSWORD=travelo
+      - NOTIFICATION_POSTGRES_HOST=postgres
+      - NOTIFICATION_POSTGRES_PORT=5432
+      - NOTIFICATION_POSTGRES_DB=travelo_messaging
+      - NOTIFICATION_POSTGRES_USER=travelo
+      - NOTIFICATION_POSTGRES_PASSWORD=travelo
+      - NOTIFICATION_FLYWAY_SCHEMA=public
+      - NOTIFICATION_HIBERNATE_SCHEMA=public
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - APP_MESSAGING_INTERNAL_API_BASE=http://127.0.0.1:8098/api/v1
+    networks:
+      - travelo-net
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=travelo
+      - POSTGRES_PASSWORD=travelo
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql
+    networks:
+      - travelo-net
+    healthcheck:
+        test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
+        interval: 10s
+        timeout: 5s
+        retries: 5
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@travelo.com
+      - PGADMIN_DEFAULT_PASSWORD=admin
+      - PGADMIN_CONFIG_SERVER_MODE=False
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+    networks:
+      - travelo-net
+
+  search-service:
+    depends_on:
+      config-server:
+        condition: service_healthy
+      service-registry:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+      social-service:
+        condition: service_started
+      commerce-service:
+        condition: service_started
+      identity-service:
+        condition: service_started
+    build:
+      context: ..
+      dockerfile: services/search-service/Dockerfile
+    ports:
+      - "8088:8088"
+    environment:
+      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888
+      - ELASTICSEARCH_URIS=http://elasticsearch:9200
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - POST_SERVICE_URL=http://social-service:8096
+      - SHOP_SERVICE_URL=http://commerce-service:8097
+      - USER_SERVICE_URL=http://identity-service:8081
+    networks:
+      - travelo-net
+    restart: unless-stopped
+
+  platform-service:
+    depends_on:
+      config-server:
+        condition: service_healthy
+      service-registry:
+        condition: service_healthy
+    build:
+      context: ..
+      dockerfile: services/platform-service/Dockerfile
+    ports:
+      - "8099:8099"
+    environment:
+      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888
+      - PLATFORM_SERVICE_PORT=8099
+    networks:
+      - travelo-net
+    restart: unless-stopped
+
+networks:
+  travelo-net:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  pgadmin-data:
+  grafana-data:
+  redis-data:
+  elasticsearch-data:

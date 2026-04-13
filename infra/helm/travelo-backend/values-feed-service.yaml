@@ -1,0 +1,25 @@
+service:
+  name: feed-service
+  port: 8085
+
+image:
+  repository: travelo
+  tag: "latest"
+
+replicaCount: 3
+
+resources:
+  requests:
+    memory: "512Mi"
+    cpu: "500m"
+  limits:
+    memory: "1Gi"
+    cpu: "1000m"
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 20
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+

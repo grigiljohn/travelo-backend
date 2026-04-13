@@ -1,0 +1,155 @@
+server:
+  port: ${IDENTITY_SERVICE_PORT:8081}
+
+spring:
+  application:
+    name: identity-service
+  config:
+    import: optional:configserver:http://localhost:8888
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+  datasource:
+    url: ${POSTGRES_URL:jdbc:postgresql://localhost:5432/travelo_auth}
+    username: ${POSTGRES_USERNAME:travelo}
+    password: ${POSTGRES_PASSWORD:travelo}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      initialization-fail-timeout: 60000
+      connection-timeout: 30000
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-test-query: SELECT 1
+      validate-on-connection: true
+      leak-detection-threshold: 60000
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    # Existing DB had tables before Flyway; create flyway_schema_history and run pending migrations.
+    baseline-on-migrate: true
+  jpa:
+    hibernate:
+      # Flyway owns additive schema changes; Hibernate updates entity-owned tables for dev.
+      ddl-auto: update
+    show-sql: true  # Enable to see SQL statements for debugging
+    properties:
+      hibernate:
+        # dialect: org.hibernate.dialect.PostgreSQLDialect  # Removed - auto-detected
+        physical_naming_strategy: org.hibernate.boot.model.naming.CamelCaseToUnderscoresNamingStrategy
+        implicit_naming_strategy: org.hibernate.boot.model.naming.ImplicitNamingStrategyJpaCompliantImpl
+        jdbc.lob.non_contextual_creation: true
+        format_sql: true
+        connection.provider_disables_autocommit: false
+    open-in-view: false
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: 5000ms
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 0
+        shutdown-timeout: 200ms
+        # Make Redis connection failures non-fatal
+        cluster:
+          refresh:
+            adaptive: true
+            period: 30s
+  mail:
+    host: ${MAIL_HOST:smtp.gmail.com}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+          connectiontimeout: 5000
+          timeout: 5000
+          writetimeout: 5000
+
+logging:
+  pattern:
+    console: "%d{ISO8601} %-5level [%X{trace_id:-}] [%X{span_id:-}] [%thread] %logger - %msg%n"
+  level:
+    root: INFO
+    com.travelo.authservice: DEBUG
+    com.travelo.userservice: DEBUG
+    org.springframework.security: INFO
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    prometheus:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+
+eureka:
+  client:
+    service-url:
+      defaultZone: http://localhost:8761/eureka/
+    register-with-eureka: true
+    fetch-registry: true
+  instance:
+    prefer-ip-address: true
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+    enabled: true
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: true
+    operations-sorter: method
+    tags-sorter: alpha
+    try-it-out-enabled: true
+    filter: true
+  show-actuator: false
+  default-consumes-media-type: application/json
+  default-produces-media-type: application/json
+
+app:
+  jwt:
+    # Must be exactly 32 bytes (256 bits) so JJWT Keys.hmacShaKeyFor uses HS256. Gateway validates with HS256.
+    secret: ${JWT_SECRET:your-256-bit-secret-key-32-bytes!!}
+    access-token-expiration: 3600  # 1 hour in seconds
+    refresh-token-expiration: 31536000  # 365 days in seconds
+  otp:
+    expiration: 300  # 5 minutes in seconds
+    length: 6
+    resend-cooldown: 60  # 60 seconds
+    default-otp: ${DEFAULT_OTP:123456}  # Default OTP for development/testing (set via environment variable)
+    use-default-otp: ${USE_DEFAULT_OTP:false}  # Set to true to use default OTP instead of random generation
+    rate-limit:
+      max-requests: 3
+      window-minutes: 10
+    verification-rate-limit:
+      max-attempts: 5
+      window-seconds: 30
+  password-reset:
+    token-expiration: 3600  # 1 hour in seconds
+    # Use {token} placeholder. Mobile users can paste this full URL into the app’s reset screen.
+    email-link-template: ${PASSWORD_RESET_LINK_TEMPLATE:https://travelo.com/reset-password?token={token}}
+  oauth:
+    google:
+      # Comma-separated OAuth client IDs allowed in Google ID token "aud" (Web + Android). Empty = skip aud check (dev).
+      allowed-client-ids: ${GOOGLE_OAUTH_CLIENT_IDS:}
+  login:
+    max-attempts: 5  # Maximum failed login attempts before lockout
+    lockout-duration: 900  # 15 minutes in seconds
+    attempt-window: 900  # 15 minutes window for counting attempts
+  scheduled-tasks:
+    enabled: true  # Enable scheduled cleanup tasks

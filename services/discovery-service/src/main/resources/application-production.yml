@@ -1,0 +1,47 @@
+# Production configuration for discovery-service
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+      probes:
+        enabled: true
+    prometheus:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    tags:
+      service: discovery-service
+      environment: production
+
+# Resilience4j for Elasticsearch
+resilience4j:
+  circuitbreaker:
+    instances:
+      elasticsearch:
+        registerHealthIndicator: true
+        slidingWindowSize: 50
+        minimumNumberOfCalls: 5
+        waitDurationInOpenState: 10s
+        failureRateThreshold: 40
+        slowCallRateThreshold: 80
+        slowCallDurationThreshold: 2s
+  retry:
+    instances:
+      elasticsearch:
+        maxAttempts: 2
+        waitDuration: 300ms
+
+# Rate Limiting Configuration
+app:
+  rate-limit:
+    enabled: true
+    default-rate: 300  # search requests per minute
+    per-user-rate: 500
+

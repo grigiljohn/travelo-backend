@@ -1,0 +1,171 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+  main:
+    web-application-type: reactive
+  config:
+    import: optional:configserver:http://localhost:8888
+  cloud:
+    gateway:
+      discovery:
+        locator:
+          enabled: false  # Disable auto-discovery, use explicit routes instead
+      routes:
+        - id: post-service
+          uri: ${SOCIAL_SERVICE_URI:lb://social-service}
+          predicates:
+            - Path=/post-service/**
+          filters:
+            - StripPrefix=1
+        - id: user-service
+          uri: ${USER_SERVICE_URI:${IDENTITY_SERVICE_URI:http://localhost:8081}}
+          predicates:
+            - Path=/user-service/**
+          filters:
+            - StripPrefix=1
+        - id: auth-service
+          uri: ${AUTH_SERVICE_URI:${IDENTITY_SERVICE_URI:http://localhost:8081}}
+          predicates:
+            - Path=/auth-service/**
+          filters:
+            - StripPrefix=1
+        - id: media-service
+          uri: lb://media-service
+          predicates:
+            - Path=/media-service/**
+          filters:
+            - StripPrefix=1
+        - id: feed-service
+          uri: ${SOCIAL_SERVICE_URI:lb://social-service}
+          predicates:
+            - Path=/feed-service/**
+          filters:
+            - StripPrefix=1
+        - id: story-service
+          uri: ${SOCIAL_SERVICE_URI:lb://social-service}
+          predicates:
+            - Path=/story-service/**
+          filters:
+            - StripPrefix=1
+        - id: moments-service
+          uri: ${SOCIAL_SERVICE_URI:lb://social-service}
+          predicates:
+            - Path=/moments-service/**
+          filters:
+            - StripPrefix=1
+        - id: reel-service
+          uri: ${SOCIAL_SERVICE_URI:lb://social-service}
+          predicates:
+            - Path=/reel-service/**
+          filters:
+            - StripPrefix=1
+        - id: search-service
+          uri: ${SEARCH_SERVICE_URI:${DISCOVERY_SERVICE_URI:http://localhost:8088}}
+          predicates:
+            - Path=/search-service/**
+          filters:
+            - StripPrefix=1
+        - id: discovery-service
+          uri: ${DISCOVERY_SERVICE_URI:${SEARCH_SERVICE_URI:http://localhost:8088}}
+          predicates:
+            - Path=/discovery-service/**
+          filters:
+            - StripPrefix=1
+        - id: notification-service
+          uri: ${NOTIFICATION_SERVICE_URI:${REALTIME_SERVICE_URI:http://localhost:8098}}
+          predicates:
+            - Path=/notification-service/**
+          filters:
+            - StripPrefix=1
+        - id: messaging-service
+          uri: ${MESSAGING_SERVICE_URI:${REALTIME_SERVICE_URI:http://localhost:8098}}
+          predicates:
+            - Path=/messaging-service/**
+          filters:
+            - StripPrefix=1
+        - id: websocket-service
+          uri: ${WEBSOCKET_SERVICE_URI:${REALTIME_SERVICE_URI:http://localhost:8098}}
+          predicates:
+            - Path=/websocket-service/**
+          filters:
+            - StripPrefix=1
+        - id: analytics-service
+          uri: ${ANALYTICS_SERVICE_URI:${PLATFORM_SERVICE_URI:http://localhost:8099}}
+          predicates:
+            - Path=/analytics-service/**
+          filters:
+            - StripPrefix=1
+        - id: ad-service
+          uri: ${COMMERCE_SERVICE_URI:lb://commerce-service}
+          predicates:
+            - Path=/ad-service/**
+          filters:
+            - StripPrefix=1
+        - id: shop-service
+          uri: ${COMMERCE_SERVICE_URI:lb://commerce-service}
+          predicates:
+            - Path=/shop-service/**
+          filters:
+            - StripPrefix=1
+        - id: admin-service
+          uri: ${ADMIN_SERVICE_URI:${PLATFORM_SERVICE_URI:http://localhost:8099}}
+          predicates:
+            - Path=/admin-service/**
+          filters:
+            - StripPrefix=1
+        - id: gateway-helpers
+          uri: ${GATEWAY_HELPERS_URI:${PLATFORM_SERVICE_URI:http://localhost:8099}}
+          predicates:
+            - Path=/gateway-helpers/**
+          filters:
+            - StripPrefix=1
+        - id: ai-orchestrator-service
+          uri: ${AI_ORCHESTRATOR_SERVICE_URI:${PLATFORM_SERVICE_URI:http://localhost:8099}}
+          predicates:
+            - Path=/ai-orchestrator-service/**
+          filters:
+            - StripPrefix=1
+        - id: music-service
+          # Music APIs are hosted in media-service; path prefix stays /music-service/** for clients.
+          uri: ${MUSIC_SERVICE_URI:lb://media-service}
+          predicates:
+            - Path=/music-service/**
+          filters:
+            - StripPrefix=1
+
+logging:
+  pattern:
+    console: "%d{ISO8601} %-5level [%X{trace_id:-}] [%X{span_id:-}] [%thread] %logger - %msg%n"
+  level:
+    root: INFO
+    org.springframework.cloud.gateway: INFO
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    prometheus:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+
+# Must match identity-service (auth JWT) exactly. Use same 32-byte secret so both use HS256.
+app:
+  jwt:
+    secret: ${JWT_SECRET:your-256-bit-secret-key-32-bytes!!}
+
+eureka:
+  client:
+    service-url:
+      defaultZone: http://localhost:8761/eureka/
+    register-with-eureka: true
+    fetch-registry: true
+  instance:
+    prefer-ip-address: true

@@ -1,0 +1,139 @@
+groups:
+  - name: travelo_service_alerts
+    interval: 30s
+    rules:
+      # High error rate
+      - alert: HighErrorRate
+        expr: |
+          rate(http_server_requests_seconds_count{status=~"5.."}[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High error rate detected"
+          description: "Service {{ $labels.service }} has error rate of {{ $value }} errors/second"
+
+      # High latency
+      - alert: HighLatency
+        expr: |
+          histogram_quantile(0.95, rate(http_server_requests_seconds_bucket[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High latency detected"
+          description: "95th percentile latency for {{ $labels.service }} is {{ $value }}s"
+
+      # Circuit breaker open
+      - alert: CircuitBreakerOpen
+        expr: |
+          resilience4j_circuitbreaker_state{state="OPEN"} == 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Circuit breaker is OPEN"
+          description: "Circuit breaker {{ $labels.name }} in service {{ $labels.service }} is OPEN"
+
+      # High CPU usage
+      - alert: HighCPUUsage
+        expr: |
+          rate(container_cpu_usage_seconds_total[5m]) > 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage"
+          description: "Pod {{ $labels.pod }} in service {{ $labels.service }} has CPU usage of {{ $value }}"
+
+      # High memory usage
+      - alert: HighMemoryUsage
+        expr: |
+          (container_memory_working_set_bytes / container_spec_memory_limit_bytes) > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage"
+          description: "Pod {{ $labels.pod }} in service {{ $labels.service }} has memory usage of {{ $value }}%"
+
+      # Pod down
+      - alert: PodDown
+        expr: |
+          up{job=~".*-service"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Pod is down"
+          description: "Pod {{ $labels.pod }} in service {{ $labels.job }} is down"
+
+      # Database connection pool exhausted
+      - alert: DatabaseConnectionPoolExhausted
+        expr: |
+          hikaricp_connections_active / hikaricp_connections_max > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Database connection pool nearly exhausted"
+          description: "Service {{ $labels.service }} has {{ $value }}% of connection pool in use"
+
+      # Redis connection issues
+      - alert: RedisConnectionFailure
+        expr: |
+          redis_connections_active == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis connection failure"
+          description: "Service {{ $labels.service }} cannot connect to Redis"
+
+      # Kafka consumer lag
+      - alert: HighKafkaConsumerLag
+        expr: |
+          kafka_consumer_lag_sum > 10000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High Kafka consumer lag"
+          description: "Service {{ $labels.service }} has consumer lag of {{ $value }} messages"
+
+      # Rate limit exceeded frequently
+      - alert: HighRateLimitExceeded
+        expr: |
+          rate(http_server_requests_seconds_count{uri="/api/v1/.*", status="429"}[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High rate limit violations"
+          description: "Service {{ $labels.service }} has {{ $value }} rate limit violations per second"
+
+  - name: travelo_infrastructure_alerts
+    interval: 30s
+    rules:
+      # Disk space running low
+      - alert: DiskSpaceLow
+        expr: |
+          (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) < 0.1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk space running low"
+          description: "Node {{ $labels.instance }} has less than 10% disk space available"
+
+      # Network errors
+      - alert: HighNetworkErrors
+        expr: |
+          rate(node_network_receive_errs_total[5m]) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High network errors"
+          description: "Node {{ $labels.instance }} has {{ $value }} network errors per second"
+

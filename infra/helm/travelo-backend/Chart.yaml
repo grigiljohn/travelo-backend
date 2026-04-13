@@ -1,0 +1,12 @@
+apiVersion: v2
+name: travelo-backend
+description: A Helm chart for Travelo Backend microservices
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - travelo
+  - microservices
+  - spring-boot
+maintainers:
+  - name: Travelo Team

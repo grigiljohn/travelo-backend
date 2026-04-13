@@ -1,0 +1,100 @@
+server:
+  port: ${DISCOVERY_SERVICE_PORT:8088}
+
+spring:
+  application:
+    name: discovery-service
+  config:
+    import: optional:configserver:http://localhost:8888
+  elasticsearch:
+    uris: ${ELASTICSEARCH_URIS:http://localhost:9200}
+    username: ${ELASTICSEARCH_USERNAME:}
+    password: ${ELASTICSEARCH_PASSWORD:}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: discovery-service-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "*"
+
+eureka:
+  client:
+    service-url:
+      defaultZone: http://localhost:8761/eureka/
+    register-with-eureka: true
+    fetch-registry: true
+  instance:
+    prefer-ip-address: true
+
+app:
+  post-service:
+    url: ${POST_SERVICE_URL:http://localhost:8096}
+  user-service:
+    url: ${USER_SERVICE_URL:http://localhost:8081}
+  shop-service:
+    url: ${SHOP_SERVICE_URL:http://localhost:8097}
+  auth-db:
+    url: ${AUTH_DB_URL:jdbc:postgresql://localhost:5432/travelo_auth}
+    username: ${AUTH_DB_USERNAME:travelo}
+    password: ${AUTH_DB_PASSWORD:travelo}
+
+# Resilience4j Circuit Breaker Configuration
+resilience4j:
+  circuitbreaker:
+    instances:
+      user-service:
+        registerHealthIndicator: true
+        slidingWindowSize: 100
+        minimumNumberOfCalls: 10
+        waitDurationInOpenState: 10s
+        failureRateThreshold: 50
+      post-service:
+        registerHealthIndicator: true
+        slidingWindowSize: 100
+        minimumNumberOfCalls: 10
+        waitDurationInOpenState: 10s
+        failureRateThreshold: 50
+      shop-service:
+        registerHealthIndicator: true
+        slidingWindowSize: 100
+        minimumNumberOfCalls: 10
+        waitDurationInOpenState: 10s
+        failureRateThreshold: 50
+      elasticsearch:
+        registerHealthIndicator: true
+        slidingWindowSize: 50
+        minimumNumberOfCalls: 5
+        waitDurationInOpenState: 10s
+        failureRateThreshold: 40
+        slowCallRateThreshold: 80
+        slowCallDurationThreshold: 2s
+  retry:
+    instances:
+      user-service:
+        maxAttempts: 2
+        waitDuration: 200ms
+      post-service:
+        maxAttempts: 2
+        waitDuration: 200ms
+      shop-service:
+        maxAttempts: 2
+        waitDuration: 200ms
+      elasticsearch:
+        maxAttempts: 2
+        waitDuration: 300ms
+
+logging:
+  pattern:
+    console: "%d{ISO8601} %-5level [%X{trace_id:-}] [%X{span_id:-}] [%thread] %logger - %msg%n"
+  level:
+    root: INFO
+    com.travelo.searchservice: DEBUG
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus

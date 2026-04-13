@@ -1,0 +1,314 @@
+services:
+  # ============================================
+  # Infrastructure Services
+  # ============================================
+  
+  config-server:
+    build:
+      context: ..
+      dockerfile: config/config-server/Dockerfile
+    ports:
+      - "8888:8888"
+    environment:
+      - SPRING_PROFILES_ACTIVE=native
+    networks:
+      - travelo-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8888/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  service-registry:
+    depends_on:
+      config-server:
+        condition: service_healthy
+    build:
+      context: ..
+      dockerfile: registry/service-registry/Dockerfile
+    ports:
+      - "8761:8761"
+    environment:
+      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888
+    networks:
+      - travelo-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8761/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================
+  # Message Queue (Kafka)
+  # ============================================
+  
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - travelo-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2181"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  kafka:
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    image: confluentinc/cp-kafka:7.5.0
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - travelo-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================
+  # Databases
+  # ============================================
+  
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      - POSTGRES_MULTIPLE_DATABASES=travelo_posts,travelo_ads,travelo_media
+      - POSTGRES_USER=travelo
+      - POSTGRES_PASSWORD=travelo
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-multiple-databases.sh:/docker-entrypoint-initdb.d/init-multiple-databases.sh
+    networks:
+      - travelo-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U travelo"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@travelo.com
+      - PGADMIN_DEFAULT_PASSWORD=admin
+      - PGADMIN_CONFIG_SERVER_MODE=False
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+    networks:
+      - travelo-net
+
+  # ============================================
+  # API Gateway
+  # ============================================
+  
+  api-gateway:
+    depends_on:
+      config-server:
+        condition: service_healthy
+      service-registry:
+        condition: service_healthy
+    build:
+      context: ..
+      dockerfile: services/api-gateway/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888
+    networks:
+      - travelo-net
+    restart: unless-stopped
+
+  # ============================================
+  # Core Services
+  # ============================================
+  
+  auth-service:
+    depends_on:
+      config-server:
+        condition: service_healthy
+      service-registry:
+        condition: service_healthy
+    build:
+      context: ..
+      dockerfile: services/auth-service/Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888
+    networks:
+      - travelo-net
+    restart: unless-stopped
+
+  user-service:
+    depends_on:
+      config-server:
+        condition: service_healthy
+      service-registry:
+        condition: service_healthy
+    build:
+      context: ..
+      dockerfile: services/user-service/Dockerfile
+    ports:
+      - "8082:8082"
+    environment:
+      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888
+    networks:
+      - travelo-net
+    restart: unless-stopped
+
+  post-service:
+    depends_on:
+      config-server:
+        condition: service_healthy
+      service-registry:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    build:
+      context: ..
+      dockerfile: services/post-service/Dockerfile
+    ports:
+      - "8083:8083"
+    environment:
+      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888
+      - POSTGRES_URL=jdbc:postgresql://postgres:5432/travelo_posts
+      - POSTGRES_USERNAME=travelo
+      - POSTGRES_PASSWORD=travelo
+    networks:
+      - travelo-net
+    restart: unless-stopped
+
+  # ============================================
+  # Media Service (NEW - CRITICAL)
+  # ============================================
+  
+  media-service:
+    depends_on:
+      config-server:
+        condition: service_healthy
+      service-registry:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    build:
+      context: ..
+      dockerfile: services/media-service/Dockerfile
+    ports:
+      - "8084:8084"
+    environment:
+      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888
+      - POSTGRES_URL=jdbc:postgresql://postgres:5432/travelo_media
+      - POSTGRES_USERNAME=travelo
+      - POSTGRES_PASSWORD=travelo
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - MEDIA_AWS_REGION=${MEDIA_AWS_REGION:-us-east-1}
+      - MEDIA_S3_BUCKET=${MEDIA_S3_BUCKET:-travelo-media}
+      - MEDIA_S3_UPLOAD_PREFIX=${MEDIA_S3_UPLOAD_PREFIX:-uploads}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+    networks:
+      - travelo-net
+    restart: unless-stopped
+
+  # ============================================
+  # Ad Service (NEW - CRITICAL)
+  # ============================================
+  
+  ad-service:
+    depends_on:
+      config-server:
+        condition: service_healthy
+      service-registry:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      media-service:
+        condition: service_started
+    build:
+      context: ..
+      dockerfile: services/ad-service/Dockerfile
+    ports:
+      - "8093:8093"
+    environment:
+      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888
+      - POSTGRES_URL=jdbc:postgresql://postgres:5432/travelo_ads
+      - POSTGRES_USERNAME=travelo
+      - POSTGRES_PASSWORD=travelo
+      - MEDIA_SERVICE_URL=http://media-service:8084
+    networks:
+      - travelo-net
+    restart: unless-stopped
+
+  feed-service:
+    depends_on:
+      config-server:
+        condition: service_healthy
+      service-registry:
+        condition: service_healthy
+    build:
+      context: ..
+      dockerfile: services/feed-service/Dockerfile
+    ports:
+      - "8085:8085"
+    environment:
+      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888
+    networks:
+      - travelo-net
+    restart: unless-stopped
+
+  notification-service:
+    depends_on:
+      config-server:
+        condition: service_healthy
+      service-registry:
+        condition: service_healthy
+    build:
+      context: ..
+      dockerfile: services/notification-service/Dockerfile
+    ports:
+      - "8089:8089"
+    environment:
+      - SPRING_CONFIG_IMPORT=optional:configserver:http://config-server:8888
+    networks:
+      - travelo-net
+    restart: unless-stopped
+
+networks:
+  travelo-net:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  pgadmin-data:
+

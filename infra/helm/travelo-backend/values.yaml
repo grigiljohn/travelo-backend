@@ -1,0 +1,91 @@
+# Default values for travelo-backend
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+replicaCount: 1
+
+image:
+  repository: travelo
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+service:
+  name: post-service
+  type: ClusterIP
+  port: 8083
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+podAnnotations: {}
+
+podSecurityContext: {}
+  # fsGroup: 2000
+
+securityContext: {}
+  # capabilities:
+  #   drop:
+  #   - ALL
+  # readOnlyRootFilesystem: true
+  # runAsNonRoot: true
+  # runAsUser: 1000
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+ingress:
+  enabled: false
+  className: "nginx"
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # kubernetes.io/tls-acme: "true"
+  hosts:
+    - host: travelo.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: travelo-tls
+  #    hosts:
+  #      - travelo.local
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 250m
+    memory: 256Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+environment: production
+
+database:
+  host: postgres
+  port: 5432
+  name: travelo
+  username: travelo
+  password: travelo
+
+kafka:
+  bootstrapServers: "kafka:9092"
+
+redis:
+  host: redis
+  port: 6379
+  password: ""
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}

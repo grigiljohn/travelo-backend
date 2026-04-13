@@ -1,0 +1,147 @@
+server:
+  port: 8084
+
+spring:
+  application:
+    name: media-service
+  config:
+    import: optional:configserver:http://localhost:8888
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/travelo_media}
+    username: ${SPRING_DATASOURCE_USERNAME:travelo}
+    password: ${SPRING_DATASOURCE_PASSWORD:travelo}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      initialization-fail-timeout: -1  # Don't fail on initialization, wait for database creation
+      connection-timeout: 30000  # Wait 30 seconds for connection
+      maximum-pool-size: 10
+      connection-test-query: SELECT 1  # Simple validation query
+      validate-on-connection: false  # Don't validate connections on startup
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+        jdbc.lob.non_contextual_creation: true
+    open-in-view: false
+  sql:
+    init:
+      mode: never
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: 500MB
+      max-request-size: 500MB
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    baseline-version: 0
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    listener:
+      # Off by default; MediaProcessingWorker is also gated by media.kafka.listeners-enabled.
+      # Override with SPRING_KAFKA_LISTENER_AUTO_STARTUP=true when you want consumers.
+      auto-startup: false
+    consumer:
+      group-id: ${spring.application.name}
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "*"
+        spring.json.value.default.type: com.travelo.mediaservice.event.MediaUploadedEvent
+        spring.json.use.type.headers: false
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+
+logging:
+  pattern:
+    console: "%d{ISO8601} %-5level [%X{trace_id:-}] [%X{span_id:-}] [%thread] %logger - %msg%n"
+  level:
+    root: INFO
+    com.travelo.mediaservice: DEBUG
+    org.springframework.web: DEBUG
+    org.hibernate.SQL: DEBUG
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    prometheus:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+
+eureka:
+  client:
+    service-url:
+      defaultZone: http://localhost:8761/eureka/
+    register-with-eureka: true
+    fetch-registry: true
+  instance:
+    prefer-ip-address: true
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+    enabled: true
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: true
+    operations-sorter: method
+    tags-sorter: alpha
+    try-it-out-enabled: true
+    filter: true
+  show-actuator: false
+  default-consumes-media-type: application/json
+  default-produces-media-type: application/json
+
+media:
+  # When true, writes demo blobs for V3-seeded media rows (see DemoLocalMediaBlobSeeder).
+  dev:
+    seed-demo-files: true
+
+  # Client-facing bases for links in JSON (upload downloadUrl, variants). S3 blob location is separate.
+  public-urls:
+    # Optional. If set, used for GET /v1/media/files/{id} links instead of storage.local.base-url (fix localhost on devices).
+    api-base-url: ${MEDIA_API_PUBLIC_BASE_URL:}
+
+  storage:
+    local:
+      base-path: ${MEDIA_STORAGE_PATH:./uploads}
+      # Fallback API base when public-urls.api-base-url is empty (dev default is localhost).
+      base-url: ${MEDIA_STORAGE_BASE_URL:http://localhost:8084}
+    s3:
+      enabled: ${MEDIA_S3_ENABLED:true}
+      bucket: ${MEDIA_S3_BUCKET:travelo-media-main}
+      region: ${MEDIA_S3_REGION:ap-southeast-2}
+      key-prefix: ${MEDIA_S3_KEY_PREFIX:media}
+      cross-region-access-enabled: ${MEDIA_S3_CROSS_REGION_ACCESS:true}
+      # Optional. If set, upload responses return direct HTTPS object URLs (CloudFront / public bucket). Empty = use API URLs above.
+      public-object-base-url: ${MEDIA_S3_PUBLIC_OBJECT_BASE_URL:}
+
+  kafka:
+    topic: ${MEDIA_KAFKA_TOPIC:media.uploaded}
+    # Consumer (@KafkaListener) off until explicitly enabled (e.g. config server or env).
+    listeners-enabled: false
+
+  # POST /api/debug/upload-test — multipart smoke test for local or S3. Set false in production.
+  debug:
+    upload-test-enabled: ${MEDIA_DEBUG_UPLOAD_TEST:true}
+
+# Music catalog S3 (separate bucket/prefix from media.storage.s3). APIs: /api/v1/music/**
+music:
+  aws:
+    region: ${MUSIC_AWS_REGION:ap-southeast-2}
+    cross-region-access: ${MUSIC_S3_CROSS_REGION_ACCESS:true}
+    bucket: ${MUSIC_S3_BUCKET:travelo-music-main}
+    account-id: ${MUSIC_AWS_ACCOUNT_ID:unknown}
+    upload-prefix: ${MUSIC_S3_UPLOAD_PREFIX:music}
+    thumbnail-prefix: ${MUSIC_S3_THUMBNAIL_PREFIX:music/thumbnails}
+    presign-expiry-minutes: ${MUSIC_S3_PRESIGN_EXPIRY_MINUTES:60}

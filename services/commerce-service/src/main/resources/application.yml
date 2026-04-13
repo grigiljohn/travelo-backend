@@ -1,0 +1,111 @@
+server:
+  port: ${COMMERCE_SERVICE_PORT:8097}
+
+spring:
+  application:
+    name: commerce-service
+  config:
+    import: optional:configserver:http://localhost:8888
+  jpa:
+    open-in-view: false
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: 500MB
+      max-request-size: 500MB
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      properties:
+        spring.json.add.type.headers: false
+
+# Two PostgreSQL databases: shops (primary JPA + Flyway db/migration/shop) and ads (JPA only).
+commerce:
+  datasource:
+    # HikariDataSource + @ConfigurationProperties: use jdbc-url (not url) so jdbcUrl is set.
+    shop:
+      jdbc-url: ${SHOP_POSTGRES_URL:jdbc:postgresql://localhost:5432/travelo_shops}
+      username: ${SHOP_POSTGRES_USERNAME:travelo}
+      password: ${SHOP_POSTGRES_PASSWORD:travelo}
+      driver-class-name: org.postgresql.Driver
+      initialization-fail-timeout: -1
+      connection-timeout: 30000
+      maximum-pool-size: 10
+      connection-test-query: SELECT 1
+      validate-on-connection: false
+    ad:
+      jdbc-url: ${AD_POSTGRES_URL:jdbc:postgresql://localhost:5432/travelo_ads}
+      username: ${AD_POSTGRES_USERNAME:travelo}
+      password: ${AD_POSTGRES_PASSWORD:travelo}
+      driver-class-name: org.postgresql.Driver
+      initialization-fail-timeout: -1
+      connection-timeout: 30000
+      maximum-pool-size: 10
+      connection-test-query: SELECT 1
+      validate-on-connection: false
+
+logging:
+  pattern:
+    console: "%d{ISO8601} %-5level [%X{trace_id:-}] [%X{span_id:-}] [%thread] %logger - %msg%n"
+  level:
+    root: INFO
+    com.travelo.shopservice: DEBUG
+    com.travelo.adservice: DEBUG
+    org.springframework.web: DEBUG
+    org.hibernate.SQL: DEBUG
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    prometheus:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    tags:
+      service: commerce-service
+      environment: ${SPRING_PROFILES_ACTIVE:dev}
+
+eureka:
+  client:
+    service-url:
+      defaultZone: http://localhost:8761/eureka/
+    register-with-eureka: true
+    fetch-registry: true
+  instance:
+    prefer-ip-address: true
+
+cors:
+  allowed-origins: ${CORS_ORIGINS:http://localhost:3000}
+  allowed-methods: GET,POST,PUT,DELETE,PATCH,OPTIONS
+  allowed-headers: "*"
+  allow-credentials: true
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+    enabled: true
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: true
+    operations-sorter: method
+    tags-sorter: alpha
+    try-it-out-enabled: true
+    filter: true
+  show-actuator: false
+  default-consumes-media-type: application/json
+  default-produces-media-type: application/json
+
+media:
+  service:
+    url: ${MEDIA_SERVICE_URL:http://localhost:8084}
+
+app:
+  ad-service:
+    url: ${INTERNAL_AD_SERVICE_URL:http://localhost:8097}

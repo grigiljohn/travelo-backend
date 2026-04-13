@@ -1,0 +1,815 @@
+{
+	"info": {
+		"_postman_id": "travelo-post-service-001",
+		"name": "Travelo Post Service API",
+		"description": "Complete API collection for Travelo Post Service. Includes endpoints for posts, comments, media uploads, and health checks.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "travelo-backend"
+	},
+	"item": [
+		{
+			"name": "Posts",
+			"item": [
+				{
+					"name": "Create Post (Multipart with Files)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "multipart/form-data",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "files",
+									"type": "file",
+									"src": [],
+									"description": "One or more files (images/videos)"
+								},
+								{
+									"key": "caption",
+									"value": "Beautiful sunset at the beach! 🌅",
+									"type": "text",
+									"description": "Post caption/description"
+								},
+								{
+									"key": "mood",
+									"value": "adventure",
+									"type": "text",
+									"description": "Mood type (required): chill, love, adventure, party, nature, food, culture, romantic, activity, relax"
+								},
+								{
+									"key": "location",
+									"value": "Bali, Indonesia",
+									"type": "text",
+									"description": "Location string (optional)"
+								},
+								{
+									"key": "tags",
+									"value": "travel,beach,sunset",
+									"type": "text",
+									"description": "Comma-separated tags (optional)"
+								},
+								{
+									"key": "owner_id",
+									"value": "{{owner_id}}",
+									"type": "text",
+									"description": "UUID of the post owner (required)"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/posts",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"posts"
+							]
+						},
+						"description": "Creates a post with file uploads. Files are uploaded directly and processed."
+					},
+					"response": []
+				},
+				{
+					"name": "Create Post (JSON - Legacy)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"post_type\": \"image\",\n  \"mood\": \"adventure\",\n  \"caption\": \"Amazing travel experience!\",\n  \"location\": \"Paris, France\",\n  \"tags\": [\"travel\", \"paris\"],\n  \"media_items\": [\n    {\n      \"media_id\": \"{{media_id}}\",\n      \"type\": \"image\",\n      \"position\": 0\n    }\n  ],\n  \"owner_id\": \"{{owner_id}}\",\n  \"music_track\": \"optional-music-track-id\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/posts",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"posts"
+							]
+						},
+						"description": "Creates a post with media IDs or URLs (legacy endpoint)."
+					},
+					"response": []
+				},
+				{
+					"name": "Get All Posts",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/v1/posts?page=1&limit=10&mood=adventure",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"posts"
+							],
+							"query": [
+								{
+									"key": "page",
+									"value": "1",
+									"description": "Page number (default: 1)"
+								},
+								{
+									"key": "limit",
+									"value": "10",
+									"description": "Items per page (default: 10, max: 50)"
+								},
+								{
+									"key": "mood",
+									"value": "adventure",
+									"description": "Filter by mood type (optional): chill, love, adventure, party, nature, food, culture, romantic, activity, relax",
+									"disabled": true
+								}
+							]
+						},
+						"description": "Retrieves paginated list of posts with optional mood filter."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Post by ID",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/v1/posts/{{post_id}}",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"posts",
+								"{{post_id}}"
+							]
+						},
+						"description": "Retrieves a specific post by its ID."
+					},
+					"response": []
+				},
+				{
+					"name": "Update Post",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"caption\": \"Updated caption\",\n  \"location\": \"Updated location\",\n  \"tags\": [\"updated\", \"tags\"]\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/posts/{{post_id}}",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"posts",
+								"{{post_id}}"
+							]
+						},
+						"description": "Updates an existing post."
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Post",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/v1/posts/{{post_id}}",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"posts",
+								"{{post_id}}"
+							]
+						},
+						"description": "Deletes a post."
+					},
+					"response": []
+				},
+				{
+					"name": "Like Post",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"liked\": true\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/posts/{{post_id}}/like",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"posts",
+								"{{post_id}}",
+								"like"
+							]
+						},
+						"description": "Likes or unlikes a post. Set liked to false to unlike."
+					},
+					"response": []
+				},
+				{
+					"name": "Unlike Post",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/v1/posts/{{post_id}}/like",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"posts",
+								"{{post_id}}",
+								"like"
+							]
+						},
+						"description": "Unlikes a post (alternative endpoint)."
+					},
+					"response": []
+				},
+				{
+					"name": "Share Post",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"platform\": \"facebook\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/posts/{{post_id}}/share",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"posts",
+								"{{post_id}}",
+								"share"
+							]
+						},
+						"description": "Shares a post and increments share count. Platform options: facebook, twitter, instagram, whatsapp, copy_link"
+					},
+					"response": []
+				}
+			],
+			"description": "Endpoints for managing posts"
+		},
+		{
+			"name": "Comments",
+			"item": [
+				{
+					"name": "Add Comment",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							},
+							{
+								"key": "X-User-Id",
+								"value": "{{user_id}}",
+								"type": "text",
+								"description": "UUID of the user making the comment (required)"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"commentText\": \"Amazing post! Love it! ❤️\",\n  \"parentId\": null\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/posts/{{post_id}}/comments",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"posts",
+								"{{post_id}}",
+								"comments"
+							]
+						},
+						"description": "Adds a comment to a post. Set parentId to reply to a comment."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Comments",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "X-User-Id",
+								"value": "{{user_id}}",
+								"type": "text",
+								"description": "Current user ID for like status (optional)",
+								"disabled": true
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/v1/posts/{{post_id}}/comments?page=1&limit=20",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"posts",
+								"{{post_id}}",
+								"comments"
+							],
+							"query": [
+								{
+									"key": "page",
+									"value": "1",
+									"description": "Page number (default: 1)"
+								},
+								{
+									"key": "limit",
+									"value": "20",
+									"description": "Items per page (default: 20)"
+								}
+							]
+						},
+						"description": "Retrieves paginated list of comments for a post."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Comment by ID",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "X-User-Id",
+								"value": "{{user_id}}",
+								"type": "text",
+								"description": "Current user ID for like status (optional)",
+								"disabled": true
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/v1/posts/{{post_id}}/comments/{{comment_id}}",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"posts",
+								"{{post_id}}",
+								"comments",
+								"{{comment_id}}"
+							]
+						},
+						"description": "Retrieves a specific comment."
+					},
+					"response": []
+				},
+				{
+					"name": "Update Comment",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							},
+							{
+								"key": "X-User-Id",
+								"value": "{{user_id}}",
+								"type": "text",
+								"description": "UUID of the comment owner (required)"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"commentText\": \"Updated comment text\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/posts/{{post_id}}/comments/{{comment_id}}",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"posts",
+								"{{post_id}}",
+								"comments",
+								"{{comment_id}}"
+							]
+						},
+						"description": "Updates a comment (only by the comment owner)."
+					},
+					"response": []
+				},
+				{
+					"name": "Delete Comment",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "X-User-Id",
+								"value": "{{user_id}}",
+								"type": "text",
+								"description": "UUID of the comment owner (required)"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/v1/posts/{{post_id}}/comments/{{comment_id}}",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"posts",
+								"{{post_id}}",
+								"comments",
+								"{{comment_id}}"
+							]
+						},
+						"description": "Deletes a comment (only by the comment owner)."
+					},
+					"response": []
+				},
+				{
+					"name": "Like Comment",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json",
+								"type": "text"
+							},
+							{
+								"key": "X-User-Id",
+								"value": "{{user_id}}",
+								"type": "text",
+								"description": "UUID of the user (required)"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"liked\": true\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/posts/{{post_id}}/comments/{{comment_id}}/like",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"posts",
+								"{{post_id}}",
+								"comments",
+								"{{comment_id}}",
+								"like"
+							]
+						},
+						"description": "Likes or unlikes a comment. Set liked to false to unlike."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Comment Replies",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "X-User-Id",
+								"value": "{{user_id}}",
+								"type": "text",
+								"description": "Current user ID for like status (optional)",
+								"disabled": true
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/v1/posts/{{post_id}}/comments/{{comment_id}}/replies?page=1&limit=20",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"posts",
+								"{{post_id}}",
+								"comments",
+								"{{comment_id}}",
+								"replies"
+							],
+							"query": [
+								{
+									"key": "page",
+									"value": "1",
+									"description": "Page number (default: 1)"
+								},
+								{
+									"key": "limit",
+									"value": "20",
+									"description": "Items per page (default: 20)"
+								}
+							]
+						},
+						"description": "Retrieves paginated replies to a comment."
+					},
+					"response": []
+				}
+			],
+			"description": "Endpoints for managing post comments"
+		},
+		{
+			"name": "Media",
+			"item": [
+				{
+					"name": "Request Upload URL",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "urlencoded",
+							"urlencoded": [
+								{
+									"key": "owner_id",
+									"value": "{{owner_id}}",
+									"type": "text",
+									"description": "UUID of the media owner (required)"
+								},
+								{
+									"key": "filename",
+									"value": "my-photo.jpg",
+									"type": "text",
+									"description": "Original filename (required)"
+								},
+								{
+									"key": "mime_type",
+									"value": "image/jpeg",
+									"type": "text",
+									"description": "MIME type (required): image/jpeg, video/mp4, etc."
+								},
+								{
+									"key": "size_bytes",
+									"value": "2048576",
+									"type": "text",
+									"description": "File size in bytes (required)"
+								},
+								{
+									"key": "media_type",
+									"value": "image",
+									"type": "text",
+									"description": "Media type (required): image, video, audio, other"
+								},
+								{
+									"key": "resumable",
+									"value": "false",
+									"type": "text",
+									"description": "Use resumable multipart upload (optional, default: false)"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/media/upload-url",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"media",
+								"upload-url"
+							]
+						},
+						"description": "Requests a presigned URL for uploading media to S3."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Multipart Part URLs",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/v1/media/{{media_id}}/multipart-urls?parts=5",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"media",
+								"{{media_id}}",
+								"multipart-urls"
+							],
+							"query": [
+								{
+									"key": "parts",
+									"value": "5",
+									"description": "Number of parts for multipart upload (required)"
+								}
+							]
+						},
+						"description": "Gets presigned URLs for multipart upload parts (for large files)."
+					},
+					"response": []
+				},
+				{
+					"name": "Complete Upload",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "urlencoded",
+							"urlencoded": [
+								{
+									"key": "etag",
+									"value": "abc123def456",
+									"type": "text",
+									"description": "ETag from S3 upload response (required)"
+								},
+								{
+									"key": "size_bytes",
+									"value": "2048576",
+									"type": "text",
+									"description": "Final file size in bytes (required)"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/media/{{media_id}}/complete",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"media",
+								"{{media_id}}",
+								"complete"
+							]
+						},
+						"description": "Confirms upload completion after file is uploaded to S3."
+					},
+					"response": []
+				}
+			],
+			"description": "Endpoints for media upload management"
+		},
+		{
+			"name": "Health",
+			"item": [
+				{
+					"name": "Health Check",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/health",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"health"
+							]
+						},
+						"description": "Checks the health status of the post-service."
+					},
+					"response": []
+				}
+			],
+			"description": "Health check endpoint"
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8083",
+			"type": "string",
+			"description": "Base URL for post-service. Use http://localhost:8080/post-service for gateway."
+		},
+		{
+			"key": "post_id",
+			"value": "550e8400-e29b-41d4-a716-446655440000",
+			"type": "string",
+			"description": "Post UUID - replace with actual post ID"
+		},
+		{
+			"key": "comment_id",
+			"value": "660e8400-e29b-41d4-a716-446655440000",
+			"type": "string",
+			"description": "Comment UUID - replace with actual comment ID"
+		},
+		{
+			"key": "user_id",
+			"value": "550e8400-e29b-41d4-a716-446655440000",
+			"type": "string",
+			"description": "User UUID - replace with actual user ID"
+		},
+		{
+			"key": "owner_id",
+			"value": "550e8400-e29b-41d4-a716-446655440000",
+			"type": "string",
+			"description": "Owner UUID - replace with actual owner ID"
+		},
+		{
+			"key": "media_id",
+			"value": "550e8400-e29b-41d4-a716-446655440000",
+			"type": "string",
+			"description": "Media UUID - replace with actual media ID"
+		}
+	]
+}
+

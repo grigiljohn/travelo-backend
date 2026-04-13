@@ -1,0 +1,128 @@
+server:
+  port: ${REALTIME_SERVICE_PORT:8098}
+
+spring:
+  application:
+    name: realtime-service
+  config:
+    import: optional:configserver:http://localhost:8888
+  jpa:
+    open-in-view: false
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: realtime-service
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "*"
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+
+# Default: notification uses the same DB as messaging (travelo_messaging) in schema "notification" — no CREATEDB needed.
+# Dedicated DB: NOTIFICATION_POSTGRES_DB=travelo_notifications and NOTIFICATION_FLYWAY_SCHEMA=public NOTIFICATION_HIBERNATE_SCHEMA=public
+# Optional auto-create when using a separate DB name: realtime.datasource.auto-create-databases (see infra/create-realtime-databases.ps1).
+realtime:
+  datasource:
+    auto-create-databases: ${REALTIME_AUTO_CREATE_DATABASES:true}
+    # HikariDataSource + @ConfigurationProperties: use jdbc-url (not url) so jdbcUrl is set; pool props flat under each datasource.
+    messaging:
+      jdbc-url: ${MESSAGING_JDBC_URL:jdbc:postgresql://${MESSAGING_POSTGRES_HOST:localhost}:${MESSAGING_POSTGRES_PORT:5432}/${MESSAGING_POSTGRES_DB:travelo_messaging}}
+      username: ${MESSAGING_POSTGRES_USER:travelo}
+      password: ${MESSAGING_POSTGRES_PASSWORD:travelo}
+      driver-class-name: org.postgresql.Driver
+      initialization-fail-timeout: 10000
+      connection-timeout: 5000
+      maximum-pool-size: 10
+      connection-test-query: SELECT 1
+      validate-on-connection: false
+      auto-commit: true
+    notification:
+      jdbc-url: ${NOTIFICATION_JDBC_URL:jdbc:postgresql://${NOTIFICATION_POSTGRES_HOST:localhost}:${NOTIFICATION_POSTGRES_PORT:5432}/${NOTIFICATION_POSTGRES_DB:travelo_messaging}}
+      username: ${NOTIFICATION_POSTGRES_USER:travelo}
+      password: ${NOTIFICATION_POSTGRES_PASSWORD:travelo}
+      driver-class-name: org.postgresql.Driver
+      initialization-fail-timeout: 10000
+      connection-timeout: 10000
+      maximum-pool-size: 10
+      connection-test-query: SELECT 1
+      validate-on-connection: false
+  notification:
+    flyway-schema: ${NOTIFICATION_FLYWAY_SCHEMA:public}
+    hibernate-default-schema: ${NOTIFICATION_HIBERNATE_SCHEMA:public}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+      base-path: /actuator
+  endpoint:
+    health:
+      enabled: true
+      show-details: always
+      probes:
+        enabled: true
+    prometheus:
+      enabled: true
+  health:
+    db:
+      enabled: true
+    kafka:
+      enabled: false
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    tags:
+      service: realtime-service
+      environment: ${SPRING_PROFILES_ACTIVE:dev}
+
+app:
+  jwt:
+    secret: ${JWT_SECRET:your-256-bit-secret-key-32-bytes!!}
+  user-service:
+    url: ${USER_SERVICE_URL:http://localhost:8081}
+  # WebSocket layer calls messaging REST in-process; use loopback so SecurityConfig loopback matcher applies.
+  messaging:
+    internal-api-base: ${APP_MESSAGING_INTERNAL_API_BASE:http://127.0.0.1:${REALTIME_SERVICE_PORT:8098}/api/v1}
+    # When true, WebSocket delivery for new messages also runs from Kafka (use in multi-node). Default: direct push after DB save.
+    kafka-ws-bridge-enabled: ${KAFKA_WS_BRIDGE_ENABLED:false}
+
+eureka:
+  client:
+    service-url:
+      defaultZone: http://localhost:8761/eureka/
+    register-with-eureka: true
+    fetch-registry: true
+    healthcheck:
+      enabled: true
+  instance:
+    prefer-ip-address: true
+  enabled: ${EUREKA_ENABLED:true}
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+    enabled: true
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: true
+    operations-sorter: method
+    tags-sorter: alpha
+    try-it-out-enabled: true
+    filter: true
+  show-actuator: false
+  default-consumes-media-type: application/json
+  default-produces-media-type: application/json
+
+logging:
+  pattern:
+    console: "%d{ISO8601} %-5level [%X{trace_id:-}] [%X{span_id:-}] [%thread] %logger - %msg%n"
+  level:
+    root: INFO
+    com.travelo.messagingservice: DEBUG
+    com.travelo.notificationservice: DEBUG
+    com.travelo.websocketservice: DEBUG

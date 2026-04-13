@@ -1,0 +1,52 @@
+# Production overrides for realtime-service (messaging + notifications + websocket)
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+      probes:
+        enabled: true
+    prometheus:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    tags:
+      service: realtime-service
+      environment: production
+
+# Resilience4j for FCM/Kafka
+resilience4j:
+  circuitbreaker:
+    instances:
+      fcm:
+        registerHealthIndicator: true
+        slidingWindowSize: 50
+        minimumNumberOfCalls: 5
+        waitDurationInOpenState: 30s
+        failureRateThreshold: 50
+      kafka:
+        registerHealthIndicator: true
+        slidingWindowSize: 100
+        minimumNumberOfCalls: 10
+        waitDurationInOpenState: 10s
+        failureRateThreshold: 30
+  retry:
+    instances:
+      fcm:
+        maxAttempts: 3
+        waitDuration: 500ms
+        enableExponentialBackoff: true
+
+# Rate Limiting Configuration
+app:
+  rate-limit:
+    enabled: true
+    default-rate: 100  # notification requests per minute
+    per-user-rate: 200
+

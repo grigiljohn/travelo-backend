@@ -1,0 +1,23 @@
+service:
+  name: discovery-service
+  port: 8088
+
+image:
+  repository: travelo
+  tag: "latest"
+
+replicaCount: 2
+
+resources:
+  requests:
+    memory: "1Gi"
+    cpu: "1000m"
+  limits:
+    memory: "2Gi"
+    cpu: "2000m"
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80

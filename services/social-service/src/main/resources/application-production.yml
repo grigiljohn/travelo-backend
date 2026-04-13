@@ -1,0 +1,60 @@
+# Production configuration for feed-service
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+      probes:
+        enabled: true
+    prometheus:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    tags:
+      service: feed-service
+      environment: production
+
+# Resilience4j Circuit Breaker Configuration
+resilience4j:
+  circuitbreaker:
+    instances:
+      post-service:
+        registerHealthIndicator: true
+        slidingWindowSize: 100
+        minimumNumberOfCalls: 10
+        waitDurationInOpenState: 10s
+        failureRateThreshold: 50
+      ad-service:
+        registerHealthIndicator: true
+        slidingWindowSize: 100
+        minimumNumberOfCalls: 10
+        waitDurationInOpenState: 10s
+        failureRateThreshold: 60  # More tolerant for ads (non-critical)
+      redis:
+        registerHealthIndicator: true
+        slidingWindowSize: 50
+        minimumNumberOfCalls: 5
+        waitDurationInOpenState: 5s
+        failureRateThreshold: 40
+  retry:
+    instances:
+      post-service:
+        maxAttempts: 2
+        waitDuration: 200ms
+      ad-service:
+        maxAttempts: 1  # Don't retry ads - fail fast
+        waitDuration: 100ms
+
+# Rate Limiting Configuration
+app:
+  rate-limit:
+    enabled: true
+    default-rate: 200  # feed requests per minute
+    per-user-rate: 300
+

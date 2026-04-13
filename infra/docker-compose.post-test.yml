@@ -1,0 +1,111 @@
+services:
+  # Database for post-service and media-service
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=travelo
+      - POSTGRES_PASSWORD=travelo
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql
+    networks:
+      - travelo-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U travelo"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Kafka for media-service event processing
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - travelo-net
+    restart: unless-stopped
+
+  kafka:
+    depends_on:
+      - zookeeper
+    image: confluentinc/cp-kafka:7.5.0
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - travelo-net
+    restart: unless-stopped
+
+  # Media service - handles file uploads
+  media-service:
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+    build:
+      context: ..
+      dockerfile: services/media-service/Dockerfile
+    ports:
+      - "8084:8084"
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/travelo_media
+      - SPRING_DATASOURCE_USERNAME=travelo
+      - SPRING_DATASOURCE_PASSWORD=travelo
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - MEDIA_AWS_REGION=${MEDIA_AWS_REGION:-ap-south-1}
+      - MEDIA_S3_BUCKET=${MEDIA_S3_BUCKET:-travelo-posts-main}
+      - MEDIA_S3_UPLOAD_PREFIX=${MEDIA_S3_UPLOAD_PREFIX:-uploads}
+      - AWS_ACCESS_KEY_ID=AKIAZYV45RNGLF4M6VWO
+      - AWS_SECRET_ACCESS_KEY=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
+      # Disable service discovery to avoid connection errors
+      - EUREKA_CLIENT_ENABLED=false
+      - SPRING_CONFIG_IMPORT=
+    networks:
+      - travelo-net
+    restart: unless-stopped
+
+  # Post service - main service for testing
+  post-service:
+    depends_on:
+      postgres:
+        condition: service_healthy
+      media-service:
+        condition: service_started
+    build:
+      context: ..
+      dockerfile: services/post-service/Dockerfile
+    ports:
+      - "8083:8083"
+    environment:
+      - POSTGRES_URL=jdbc:postgresql://postgres:5432/travelo_posts
+      - POSTGRES_USERNAME=travelo
+      - POSTGRES_PASSWORD=travelo
+      - MEDIA_SERVICE_URL=http://media-service:8084
+      # Disable service discovery to avoid connection errors
+      - EUREKA_CLIENT_ENABLED=false
+      - SPRING_CONFIG_IMPORT=
+    networks:
+      - travelo-net
+
+networks:
+  travelo-net:
+    driver: bridge
+
+volumes:
+  postgres-data:
+

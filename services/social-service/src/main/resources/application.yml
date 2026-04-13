@@ -1,0 +1,249 @@
+server:
+  port: ${SOCIAL_SERVICE_PORT:8096}
+
+spring:
+  application:
+    name: social-service
+  config:
+    import: optional:configserver:http://localhost:8888
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+  jpa:
+    open-in-view: false
+    defer-datasource-initialization: false
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: 500MB
+      max-request-size: 500MB
+  sql:
+    init:
+      mode: never
+  redis:
+    host: ${REDIS_HOST:localhost}
+    port: ${REDIS_PORT:6379}
+    password: ${REDIS_PASSWORD:}
+    timeout: 2000ms
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    listener:
+      auto-startup: ${KAFKA_LISTENERS_ENABLED:false}
+    consumer:
+      group-id: ${spring.application.name}
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "*"
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+
+# Three PostgreSQL databases: posts (primary JPA + Flyway db/migration/post), stories (db/migration/story), reels (db/migration/reel).
+social:
+  datasource:
+    # Bind to HikariDataSource: use jdbc-url (not url) so jdbcUrl is set; pool props must be flat under each datasource.
+    post:
+      jdbc-url: ${POSTGRES_URL:jdbc:postgresql://localhost:5432/travelo_posts}
+      username: ${POSTGRES_USERNAME:travelo}
+      password: ${POSTGRES_PASSWORD:travelo}
+      driver-class-name: org.postgresql.Driver
+      initialization-fail-timeout: -1
+      connection-timeout: 30000
+      maximum-pool-size: 10
+      connection-test-query: SELECT 1
+    story:
+      jdbc-url: ${STORY_DATASOURCE_URL:jdbc:postgresql://localhost:5432/travelo_stories}
+      username: ${STORY_DATASOURCE_USERNAME:travelo}
+      password: ${STORY_DATASOURCE_PASSWORD:travelo}
+      driver-class-name: org.postgresql.Driver
+      initialization-fail-timeout: -1
+      connection-timeout: 30000
+      maximum-pool-size: 10
+      connection-test-query: SELECT 1
+    reel:
+      jdbc-url: ${REEL_DATASOURCE_URL:jdbc:postgresql://localhost:5432/travelo_reels}
+      username: ${REEL_DATASOURCE_USERNAME:travelo}
+      password: ${REEL_DATASOURCE_PASSWORD:travelo}
+      driver-class-name: org.postgresql.Driver
+      initialization-fail-timeout: -1
+      connection-timeout: 30000
+      maximum-pool-size: 10
+      connection-test-query: SELECT 1
+
+logging:
+  pattern:
+    console: "%d{ISO8601} %-5level [%X{trace_id:-}] [%X{span_id:-}] [%thread] %logger - %msg%n"
+  level:
+    root: INFO
+    com.travelo.postservice: DEBUG
+    com.travelo.feedservice: DEBUG
+    com.travelo.storyservice: DEBUG
+    com.travelo.momentsservice: DEBUG
+    com.travelo.reelservice: DEBUG
+    org.springframework.web: DEBUG
+    org.hibernate.SQL: DEBUG
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+    prometheus:
+      enabled: true
+  health:
+    db:
+      enabled: true
+    diskspace:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    tags:
+      service: social-service
+      environment: ${SPRING_PROFILES_ACTIVE:dev}
+
+eureka:
+  client:
+    service-url:
+      defaultZone: http://localhost:8761/eureka/
+    register-with-eureka: true
+    fetch-registry: true
+  instance:
+    prefer-ip-address: true
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+    enabled: true
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: true
+    operations-sorter: method
+    tags-sorter: alpha
+    try-it-out-enabled: true
+    filter: true
+  show-actuator: false
+  default-consumes-media-type: application/json
+  default-produces-media-type: application/json
+
+app:
+  dev:
+    allow-header-user-fallback: ${ALLOW_HEADER_USER_FALLBACK:true}
+  jwt:
+    secret: ${JWT_SECRET:your-256-bit-secret-key-32-bytes!!}
+  media:
+    upload-dir: uploads
+    base-url: ${SOCIAL_PUBLIC_BASE_URL:http://localhost:8096}
+  media-service:
+    url: ${MEDIA_SERVICE_URL:http://localhost:8084}
+  user-service:
+    url: ${USER_SERVICE_URL:http://localhost:8081}
+  post-service:
+    url: ${INTERNAL_POST_SERVICE_URL:http://localhost:8096}
+  story-service:
+    url: ${INTERNAL_STORY_SERVICE_URL:http://localhost:8096}
+  ad-service:
+    url: ${AD_SERVICE_URL:http://localhost:8097}
+  analytics-service:
+    url: ${ANALYTICS_SERVICE_URL:http://localhost:8099}
+  recommendation-service:
+    url: ${RECOMMENDATION_SERVICE_URL:http://localhost:8091}
+  feed:
+    cache-enabled: ${FEED_CACHE_ENABLED:true}
+    cache-ttl-seconds: ${FEED_CACHE_TTL:3600}
+    fan-out-enabled: ${FEED_FANOUT_ENABLED:true}
+    recommended-prefetch-limit: ${FEED_RECOMMENDED_PREFETCH_LIMIT:12}
+    events:
+      kafka-enabled: ${FEED_EVENTS_KAFKA_ENABLED:false}
+      kafka-topic: ${FEED_EVENTS_KAFKA_TOPIC:feed.user_events}
+
+services:
+  ai-orchestrator:
+    base-url: ${AI_ORCHESTRATOR_SERVICE_URL:http://127.0.0.1:8099}
+
+moments:
+  storage:
+    local-dir: ${MOMENTS_LOCAL_DIR:C:/temp/travelo-moments}
+
+reel:
+  kafka:
+    listeners-enabled: ${REEL_KAFKA_LISTENERS_ENABLED:false}
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      media-service:
+        registerHealthIndicator: true
+        slidingWindowSize: 100
+        minimumNumberOfCalls: 10
+        waitDurationInOpenState: 10s
+        failureRateThreshold: 50
+      user-service:
+        registerHealthIndicator: true
+        slidingWindowSize: 100
+        minimumNumberOfCalls: 10
+        waitDurationInOpenState: 10s
+        failureRateThreshold: 50
+      post-service:
+        registerHealthIndicator: true
+        slidingWindowSize: 100
+        minimumNumberOfCalls: 10
+        waitDurationInOpenState: 10s
+        failureRateThreshold: 50
+      story-service:
+        registerHealthIndicator: true
+        slidingWindowSize: 100
+        minimumNumberOfCalls: 10
+        waitDurationInOpenState: 10s
+        failureRateThreshold: 55
+      ad-service:
+        registerHealthIndicator: true
+        slidingWindowSize: 100
+        minimumNumberOfCalls: 10
+        waitDurationInOpenState: 10s
+        failureRateThreshold: 60
+      analytics-service:
+        registerHealthIndicator: true
+        slidingWindowSize: 50
+        minimumNumberOfCalls: 5
+        waitDurationInOpenState: 5s
+        failureRateThreshold: 60
+      recommendation-service:
+        registerHealthIndicator: true
+        slidingWindowSize: 50
+        minimumNumberOfCalls: 5
+        waitDurationInOpenState: 5s
+        failureRateThreshold: 60
+  retry:
+    instances:
+      media-service:
+        maxAttempts: 2
+        waitDuration: 200ms
+      user-service:
+        maxAttempts: 2
+        waitDuration: 200ms
+      post-service:
+        maxAttempts: 2
+        waitDuration: 200ms
+      story-service:
+        maxAttempts: 1
+        waitDuration: 120ms
+      ad-service:
+        maxAttempts: 1
+        waitDuration: 100ms
+      analytics-service:
+        maxAttempts: 1
+        waitDuration: 100ms
+      recommendation-service:
+        maxAttempts: 1
+        waitDuration: 100ms
