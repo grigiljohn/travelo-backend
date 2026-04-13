@@ -22,10 +22,11 @@ Railway does **not** run `docker-compose.yml` as-is. Recreate each dependency as
 | Path | Purpose |
 |------|---------|
 | `infra/railway/RAILWAY.md` | This guide |
-| `infra/railway/config-as-code/*.toml.example` | Copy to `railway.toml` in repo root **or** paste into Railway **Settings → Config-as-code** per service (adjust `dockerfilePath` per service). |
+| `railway.json` (repo root) | Default config-as-code for the API gateway image: **`build.builder` = `DOCKERFILE`**, root `Dockerfile`, **`deploy.startCommand` = null** (use image `ENTRYPOINT`). |
+| `infra/railway/config-as-code/*.toml.example` | Optional per-service overrides: copy to `railway.toml` **or** paste into **Settings → Config-as-code** (adjust `dockerfilePath` per service). |
 | `infra/railway/env/*.env.example` | Variable templates for each service |
 
-**Config-as-code:** Railway reads `railway.toml` from the **linked repo root** for that Railway service. For multiple services from one repo, create **multiple Railway services**, each with the same GitHub repo but different **Root Directory** (leave empty) and set **Dockerfile path** in the UI, **or** use a `railway.toml` checked in per branch with different build settings (often easier: configure Dockerfile path only in the dashboard).
+**Config-as-code:** Railway reads **`railway.json` or `railway.toml`** from the **linked repo root** by default. For multiple services from one repo, create **multiple Railway services**, each with the same GitHub repo; leave **Root directory** empty unless you know you must set **Config as code** to an absolute path such as **`/railway.json`**. Per-service `dockerfilePath` can stay in the dashboard if you do not duplicate a config file per service.
 
 ---
 
@@ -96,7 +97,7 @@ Follow each service’s `application.yml` and `docker-compose.yml` for `POSTGRES
 
 ## 4. Health checks
 
-Railway **Deploy → Healthcheck path** (or `railway.toml` `[deploy] healthcheckPath`):
+Railway **Deploy → Healthcheck path** (or `railway.json` `deploy.healthcheckPath` / `railway.toml` `[deploy] healthcheckPath`):
 
 | Service | Path |
 |---------|------|
@@ -154,9 +155,7 @@ Use `TRAVELO_API_BASE_URL` (or per-service vars) in the Flutter app so paths lik
 
 ## 8. Copy-paste config-as-code
 
-Rename an example file to `railway.toml` at the repo root **only if** that Railway service should use it (one service per file content — duplicate repo connections or use dashboard for other services).
-
-Examples live under `infra/railway/config-as-code/`.
+The API gateway ships with repo-root **`railway.json`**. Rename an example under `infra/railway/config-as-code/` to **`railway.toml`** at the repo root **only if** that Railway service should use a different file (one service per file content — duplicate repo connections or use dashboard for other services).
 
 ---
 
@@ -164,15 +163,16 @@ Examples live under `infra/railway/config-as-code/`.
 
 ### `Error: Unable to access jarfile target/*jar`
 
-Railway **Railpack** / **Nixpacks** auto-detected Java and tried to run something like `java -jar target/*jar` from the **repo root**, where no shaded JAR exists and globs are not expanded for `java`.
+Railway **Railpack** auto-detected Java and tried to run something like `java -jar target/*jar` from the **repo root**, where no shaded JAR exists and globs are not expanded for `java`. An **empty** “Custom start command” in **Deploy** does **not** fix this — the bad command comes from the **Railpack builder**, not from that field.
 
-**Fix:**
+**Fix (do these in order):**
 
-1. In Railway → your service → **Settings** → set **Builder** to **Dockerfile** (not Railpack / Nixpacks).
-2. Set **Dockerfile path** to `Dockerfile` (repo root; same build as `services/api-gateway/Dockerfile`) or to `services/<service>/Dockerfile`, **Root directory** empty (monorepo root). If you must set a non-root **Root directory**, Railway does **not** auto-load `railway.toml` from the repo root — under **Settings → Config as code**, set the file path to **`/railway.toml`** (absolute from repository root), or duplicate a minimal `railway.toml` inside that directory with `builder = "DOCKERFILE"` and the correct `dockerfilePath`.
-3. **Remove** any custom **Start Command** / **Deploy → Custom start command** (must be empty so the image `ENTRYPOINT` runs: `java -jar /app/app.jar`). On the deployment details page, confirm the effective **Config source** shows your config file and **Builder: DOCKERFILE**; if it still says Railpack, the checked-in config is not applied to this service.
-4. Optional fallback: add a service variable **`RAILWAY_DOCKERFILE_PATH=Dockerfile`** (or the path to the Dockerfile you use) so Railway resolves the image build even when detection misbehaves.
-5. Commit the repo-root **`railway.toml`** in this repo — it pins `[build] builder = "DOCKERFILE"` and `dockerfilePath` so new environments do not fall back to Railpack.
+0. Open **Settings → Build** (not only Deploy). Set **Builder** to **Dockerfile**. Set **Dockerfile path** to **`Dockerfile`**. Leave **Root directory** empty for this monorepo. Redeploy and read **Build** logs: you should see Docker build stages (`FROM maven…`, `RUN mvn…`), not only “Railpack”.
+1. On **Deployment → details**, confirm **Config source** includes **`railway.json`** and that **Builder** shows **DOCKERFILE**. If there is no file icon / no `railway.json`, your service is not building from the branch that contains it, or **Config as code** is pointed at the wrong path — set it to **`/railway.json`** (repo root).
+2. If you use a non-empty **Root directory**, Railway does not auto-pick repo-root config — set **Config as code** to **`/railway.json`**, or add a minimal `railway.json` in that directory with `"build": { "builder": "DOCKERFILE", "dockerfilePath": "Dockerfile" }` and a Dockerfile that matches your layout.
+3. **Deploy → Custom start command** should stay **empty** (or explicitly cleared) so the image **`ENTRYPOINT`** runs: `java -jar /app/app.jar`. The repo’s `railway.json` sets `"startCommand": null` for the same reason.
+4. Optional fallback: add service variable **`RAILWAY_DOCKERFILE_PATH=Dockerfile`**.
+5. **Push** the branch Railway builds so **`railway.json`** and root **`Dockerfile`** are on GitHub.
 
 Rebuild and redeploy.
 

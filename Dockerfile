@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Repo root Dockerfile: Railway’s default detector looks here first. Kept in sync with
-# services/api-gateway/Dockerfile; for other services point railway.toml at services/<name>/Dockerfile.
+# services/api-gateway/Dockerfile; for other services set `dockerfilePath` in `railway.json` (or a per-service config file).
 #
 # Default build: API gateway (port 8080). For social-service, copy services/social-service/Dockerfile here
 # or point Railway "Dockerfile path" to services/social-service/Dockerfile.
