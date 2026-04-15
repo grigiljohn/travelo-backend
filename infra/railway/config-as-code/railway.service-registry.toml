@@ -1,0 +1,12 @@
+# Per-service Railway config: add this path under Settings → Config-as-code for the
+# service-registry service only (avoids repo-root railway.json building api-gateway).
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "registry/service-registry/Dockerfile"
+watchPatterns = ["registry/service-registry/**", "libs/**", "pom.xml"]
+
+[deploy]
+healthcheckPath = "/actuator/health"
+healthcheckTimeout = 120
+restartPolicyType = "ON_FAILURE"
