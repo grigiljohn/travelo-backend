@@ -16,6 +16,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.InputStream;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 
 /**
@@ -32,13 +33,25 @@ public class MediaController {
     private final MediaUploadService mediaUploadService;
     private final com.travelo.mediaservice.service.MediaProcessingService mediaProcessingService;
     private final com.travelo.mediaservice.service.LocalStorageService localStorageService;
+    private final com.travelo.mediaservice.service.MediaContentResolutionService contentResolutionService;
+    private final boolean enforceReadSafety;
+    private final boolean requireReadyStateForServing;
+    private final String moderationAdminToken;
 
     public MediaController(MediaUploadService mediaUploadService,
                           com.travelo.mediaservice.service.MediaProcessingService mediaProcessingService,
-                          com.travelo.mediaservice.service.LocalStorageService localStorageService) {
+                          com.travelo.mediaservice.service.LocalStorageService localStorageService,
+                          com.travelo.mediaservice.service.MediaContentResolutionService contentResolutionService,
+                          @org.springframework.beans.factory.annotation.Value("${media.moderation.enforce-read-safety:true}") boolean enforceReadSafety,
+                          @org.springframework.beans.factory.annotation.Value("${media.moderation.require-ready-state-for-serving:true}") boolean requireReadyStateForServing,
+                          @org.springframework.beans.factory.annotation.Value("${media.moderation.admin-token:}") String moderationAdminToken) {
         this.mediaUploadService = mediaUploadService;
         this.mediaProcessingService = mediaProcessingService;
         this.localStorageService = localStorageService;
+        this.contentResolutionService = contentResolutionService;
+        this.enforceReadSafety = enforceReadSafety;
+        this.requireReadyStateForServing = requireReadyStateForServing;
+        this.moderationAdminToken = moderationAdminToken;
     }
 
     /**
@@ -75,14 +88,10 @@ public class MediaController {
             @RequestParam(value = "variant", required = false) String variant) {
         log.debug("flow=media_download GET /v1/media/files/{} variant={}", mediaId, variant);
         MediaFile media = mediaUploadService.getMedia(mediaId);
-        String storageKey = variant != null && !variant.isEmpty()
-                ? media.getVariants().stream()
-                    .filter(v -> v != null && variant.equals(v.getName()))
-                    .map(com.travelo.mediaservice.entity.MediaVariant::getKey)
-                    .filter(k -> k != null && !k.trim().isEmpty())
-                    .findFirst()
-                    .orElse(null)
-                : media.getStorageKey();
+        assertReadableForStreaming(media);
+        com.travelo.mediaservice.service.MediaContentResolutionService.ResolvedContent resolved =
+                contentResolutionService.resolve(media, variant);
+        String storageKey = resolved.storageKey();
         if (storageKey == null) {
             log.warn("flow=media_download NOT_FOUND mediaId={} reason=null_storage_key variant={}", mediaId, variant);
             return ResponseEntity.notFound().build();
@@ -94,14 +103,29 @@ public class MediaController {
         }
         try {
             InputStream in = localStorageService.getInputStream(storageKey);
-            String contentType = media.getMimeType() != null ? media.getMimeType() : "application/octet-stream";
+            String contentType = resolved.contentType() != null ? resolved.contentType() : "application/octet-stream";
+            String fname = resolved.downloadFilename() != null ? resolved.downloadFilename() : "media";
             return ResponseEntity.ok()
                     .contentType(MediaType.parseMediaType(contentType))
-                    .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + (media.getFilename() != null ? media.getFilename() : "media") + "\"")
+                    .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + fname.replace("\"", "_") + "\"")
+                    .header(HttpHeaders.CACHE_CONTROL, "public, max-age=31536000, immutable")
                     .body(new InputStreamResource(in));
         } catch (Exception e) {
             log.error("Error serving file for mediaId={}", mediaId, e);
             return ResponseEntity.internalServerError().build();
+        }
+    }
+
+    private void assertReadableForStreaming(MediaFile media) {
+        if (media == null) {
+            return;
+        }
+        String safety = media.getSafetyStatus() == null ? "unknown" : media.getSafetyStatus().trim().toLowerCase(Locale.ROOT);
+        if (enforceReadSafety && ("unsafe".equals(safety) || "review".equals(safety))) {
+            throw new SecurityException("Media blocked by moderation policy");
+        }
+        if (requireReadyStateForServing && media.getState() != com.travelo.mediaservice.entity.MediaStatus.READY) {
+            throw new IllegalStateException("Media is not ready for serving");
         }
     }
 
@@ -235,5 +259,72 @@ public class MediaController {
             @Valid @RequestBody com.travelo.mediaservice.dto.RotateImageRequest request) {
         log.info("POST /v1/media/{}/rotate - angle={}°", mediaId, request.angleDegrees());
         return mediaProcessingService.rotateImage(mediaId, request);
+    }
+
+    /**
+     * Admin moderation queue.
+     * GET /v1/media/admin/moderation/queue?limit=100
+     */
+    @GetMapping("/admin/moderation/queue")
+    @ResponseStatus(HttpStatus.OK)
+    public List<ModerationQueueItemResponse> getModerationQueue(
+            @RequestHeader(value = "X-Moderation-Admin-Token", required = false) String adminToken,
+            @RequestParam(name = "limit", defaultValue = "100") int limit) {
+        requireModerationAdmin(adminToken);
+        return mediaUploadService.getModerationQueue(limit).stream()
+                .map(media -> new ModerationQueueItemResponse(
+                        media.getId(),
+                        media.getOwnerId(),
+                        media.getFilename(),
+                        media.getMimeType(),
+                        media.getState() != null ? media.getState().name().toLowerCase() : "unknown",
+                        media.getSafetyStatus(),
+                        media.getStorageKey(),
+                        media.getMeta(),
+                        media.getCreatedAt(),
+                        media.getUpdatedAt()
+                ))
+                .toList();
+    }
+
+    /**
+     * Admin moderation decision.
+     * POST /v1/media/admin/moderation/{mediaId}/decision
+     */
+    @PostMapping("/admin/moderation/{mediaId}/decision")
+    @ResponseStatus(HttpStatus.OK)
+    public ModerationQueueItemResponse applyModerationDecision(
+            @RequestHeader(value = "X-Moderation-Admin-Token", required = false) String adminToken,
+            @RequestHeader(value = "X-Moderation-Reviewer", required = false) String reviewer,
+            @PathVariable("mediaId") UUID mediaId,
+            @Valid @RequestBody ModerationDecisionRequest request) {
+        requireModerationAdmin(adminToken);
+        MediaFile media = mediaUploadService.applyModerationDecision(
+                mediaId,
+                request.getDecision(),
+                request.getReason(),
+                reviewer
+        );
+        return new ModerationQueueItemResponse(
+                media.getId(),
+                media.getOwnerId(),
+                media.getFilename(),
+                media.getMimeType(),
+                media.getState() != null ? media.getState().name().toLowerCase() : "unknown",
+                media.getSafetyStatus(),
+                media.getStorageKey(),
+                media.getMeta(),
+                media.getCreatedAt(),
+                media.getUpdatedAt()
+        );
+    }
+
+    private void requireModerationAdmin(String adminToken) {
+        if (moderationAdminToken == null || moderationAdminToken.isBlank()) {
+            throw new IllegalStateException("Moderation admin token is not configured");
+        }
+        if (adminToken == null || !moderationAdminToken.equals(adminToken)) {
+            throw new SecurityException("Invalid moderation admin token");
+        }
     }
 }

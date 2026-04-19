@@ -6,10 +6,17 @@ spring:
     name: discovery-service
   config:
     import: optional:configserver:http://localhost:8888
+  # Search / reindex APIs need Elasticsearch reachable at this URI when those endpoints run.
+  # Example: docker run --rm -p 9200:9200 -e "discovery.type=single-node" docker.elastic.co/elasticsearch/elasticsearch:8.12.1
   elasticsearch:
     uris: ${ELASTICSEARCH_URIS:http://localhost:9200}
     username: ${ELASTICSEARCH_USERNAME:}
     password: ${ELASTICSEARCH_PASSWORD:}
+  data:
+    elasticsearch:
+      repositories:
+        # Defers repository bean init where supported; @Lazy on repository injections also avoids ES at startup.
+        bootstrap-mode: lazy
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:

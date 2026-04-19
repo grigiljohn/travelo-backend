@@ -6,6 +6,7 @@ import com.travelo.searchservice.repository.*;
 import com.travelo.searchservice.service.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -31,12 +32,12 @@ public class SearchServiceImpl implements SearchService {
     private final com.travelo.searchservice.client.UserServiceClient userServiceClient;
 
     public SearchServiceImpl(
-            PostDocumentRepository postRepository,
-            UserDocumentRepository userRepository,
-            HashtagDocumentRepository hashtagRepository,
-            LocationDocumentRepository locationRepository,
-            ShopDocumentRepository shopRepository,
-            ProductDocumentRepository productRepository,
+            @Lazy PostDocumentRepository postRepository,
+            @Lazy UserDocumentRepository userRepository,
+            @Lazy HashtagDocumentRepository hashtagRepository,
+            @Lazy LocationDocumentRepository locationRepository,
+            @Lazy ShopDocumentRepository shopRepository,
+            @Lazy ProductDocumentRepository productRepository,
             PrivacyFilterService privacyFilterService,
             RelevanceScorerService relevanceScorerService,
             SearchResultGroupingService groupingService,

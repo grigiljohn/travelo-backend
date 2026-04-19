@@ -1,9 +1,11 @@
 package com.travelo.feedservice.service.impl;
 
 import com.travelo.feedservice.client.dto.PostDto;
+import com.travelo.feedservice.dto.FeedRankingDebugItem;
 import com.travelo.feedservice.service.FeedRankingService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -24,20 +26,40 @@ public class FeedRankingServiceImpl implements FeedRankingService {
 
     private static final Logger logger = LoggerFactory.getLogger(FeedRankingServiceImpl.class);
 
-    // Weight constants for ranking signals
-    private static final double RECENCY_WEIGHT = 0.35;
-    private static final double AFFINITY_WEIGHT = 0.30;
-    private static final double POPULARITY_WEIGHT = 0.25;
-    private static final double CONTENT_TYPE_WEIGHT = 0.10;
+    // Production-oriented defaults, override via application.yml/env.
+    private final double recencyWeight;
+    private final double affinityWeight;
+    private final double popularityWeight;
+    private final double contentTypeWeight;
+    private final double followingBoost;
+    private final double reelBoost;
+    private final double nonFollowingAffinityScore;
+    private final double halfLifeHours;
+    private final int maxConsecutiveSameAuthor;
+    private final int maxConsecutiveReels;
 
-    // Following boost multiplier
-    private static final double FOLLOWING_BOOST = 2.0;
-    
-    // Reel boost multiplier
-    private static final double REEL_BOOST = 1.5;
-
-    // Time decay half-life (in hours)
-    private static final double HALF_LIFE_HOURS = 24.0;
+    public FeedRankingServiceImpl(
+            @Value("${app.feed.ranking.weights.recency:0.35}") double recencyWeight,
+            @Value("${app.feed.ranking.weights.affinity:0.30}") double affinityWeight,
+            @Value("${app.feed.ranking.weights.popularity:0.25}") double popularityWeight,
+            @Value("${app.feed.ranking.weights.content-type:0.10}") double contentTypeWeight,
+            @Value("${app.feed.ranking.following-boost:2.0}") double followingBoost,
+            @Value("${app.feed.ranking.reel-boost:1.5}") double reelBoost,
+            @Value("${app.feed.ranking.non-following-affinity-score:0.5}") double nonFollowingAffinityScore,
+            @Value("${app.feed.ranking.recency-half-life-hours:24.0}") double halfLifeHours,
+            @Value("${app.feed.diversity.max-consecutive-same-author:2}") int maxConsecutiveSameAuthor,
+            @Value("${app.feed.diversity.max-consecutive-reels:2}") int maxConsecutiveReels) {
+        this.recencyWeight = recencyWeight;
+        this.affinityWeight = affinityWeight;
+        this.popularityWeight = popularityWeight;
+        this.contentTypeWeight = contentTypeWeight;
+        this.followingBoost = followingBoost;
+        this.reelBoost = reelBoost;
+        this.nonFollowingAffinityScore = nonFollowingAffinityScore;
+        this.halfLifeHours = halfLifeHours;
+        this.maxConsecutiveSameAuthor = Math.max(1, maxConsecutiveSameAuthor);
+        this.maxConsecutiveReels = Math.max(1, maxConsecutiveReels);
+    }
 
     @Override
     public List<PostDto> rankPosts(List<PostDto> posts, UUID userId, List<UUID> followedUserIds) {
@@ -58,10 +80,11 @@ public class FeedRankingServiceImpl implements FeedRankingService {
                         post -> calculateScore(post, userId, followedSet.contains(post.getUserId()))
                 ));
 
-        // Sort by score descending
-        return posts.stream()
+        // Sort by score descending then apply diversity pass.
+        List<PostDto> sortedByScore = posts.stream()
                 .sorted((p1, p2) -> Double.compare(postScores.get(p2), postScores.get(p1)))
                 .collect(Collectors.toList());
+        return applyDiversityConstraints(sortedByScore, postScores);
     }
 
     @Override
@@ -71,15 +94,42 @@ public class FeedRankingServiceImpl implements FeedRankingService {
         double popularityScore = calculatePopularityScore(post);
         double contentTypeScore = calculateContentTypeScore(post);
 
-        double finalScore = (recencyScore * RECENCY_WEIGHT) +
-                           (affinityScore * AFFINITY_WEIGHT) +
-                           (popularityScore * POPULARITY_WEIGHT) +
-                           (contentTypeScore * CONTENT_TYPE_WEIGHT);
+        double finalScore = (recencyScore * recencyWeight) +
+                           (affinityScore * affinityWeight) +
+                           (popularityScore * popularityWeight) +
+                           (contentTypeScore * contentTypeWeight);
 
         logger.trace("Post {} score: recency={}, affinity={}, popularity={}, contentType={}, final={}",
                 post.getId(), recencyScore, affinityScore, popularityScore, contentTypeScore, finalScore);
 
         return finalScore;
+    }
+
+    @Override
+    public FeedRankingDebugItem buildDebugItem(PostDto post, UUID userId, boolean isFollowingAuthor) {
+        FeedRankingDebugItem debug = new FeedRankingDebugItem();
+        debug.setPostId(post != null ? post.getId() : null);
+        debug.setAuthorUserId(post != null ? post.getUserId() : null);
+        debug.setPostType(post != null ? post.getPostType() : null);
+        debug.setFollowingAuthor(isFollowingAuthor);
+
+        double recency = calculateRecencyScore(post);
+        double affinity = calculateAffinityScore(isFollowingAuthor);
+        double popularity = calculatePopularityScore(post);
+        double contentType = calculateContentTypeScore(post);
+        double baseScore = (recency * recencyWeight)
+                + (affinity * affinityWeight)
+                + (popularity * popularityWeight)
+                + (contentType * contentTypeWeight);
+
+        debug.setRecencyComponent(recency * recencyWeight);
+        debug.setAffinityComponent(affinity * affinityWeight);
+        debug.setPopularityComponent(popularity * popularityWeight);
+        debug.setContentTypeComponent(contentType * contentTypeWeight);
+        debug.setBaseScore(baseScore);
+        debug.setOnlineSignalScore(0.0d);
+        debug.setFinalScore(baseScore);
+        return debug;
     }
 
     /**
@@ -98,7 +148,7 @@ public class FeedRankingServiceImpl implements FeedRankingService {
 
             // Exponential decay: score = e^(-λ * t)
             // where λ = ln(2) / half_life
-            double lambda = Math.log(2) / HALF_LIFE_HOURS;
+            double lambda = Math.log(2) / halfLifeHours;
             double score = Math.exp(-lambda * hoursAgo);
 
             // Normalize to [0, 1] range (clamp if needed)
@@ -114,9 +164,9 @@ public class FeedRankingServiceImpl implements FeedRankingService {
      */
     private double calculateAffinityScore(boolean isFollowingAuthor) {
         if (isFollowingAuthor) {
-            return 1.0 * FOLLOWING_BOOST; // Boost for followed users
+            return followingBoost; // Boost for followed users
         }
-        return 0.5; // Base score for non-followed users
+        return nonFollowingAffinityScore; // Base score for non-followed users
     }
 
     /**
@@ -147,9 +197,75 @@ public class FeedRankingServiceImpl implements FeedRankingService {
         String postType = post.getPostType() != null ? post.getPostType() : "";
         
         if ("reel".equalsIgnoreCase(postType) || "REEL".equalsIgnoreCase(postType)) {
-            return 1.0 * REEL_BOOST; // Boost for reels
+            return reelBoost; // Boost for reels
         }
         return 1.0; // Base score for other content types
+    }
+
+    /**
+     * Greedy diversity reranker:
+     * - avoids long runs from same author
+     * - avoids long runs of reels
+     * while staying as close as possible to score ordering.
+     */
+    private List<PostDto> applyDiversityConstraints(List<PostDto> sortedByScore, Map<PostDto, Double> scoreByPost) {
+        if (sortedByScore.isEmpty()) {
+            return sortedByScore;
+        }
+        List<PostDto> remaining = new ArrayList<>(sortedByScore);
+        List<PostDto> result = new ArrayList<>(sortedByScore.size());
+
+        int sameAuthorStreak = 0;
+        int reelStreak = 0;
+        String lastAuthorId = null;
+
+        while (!remaining.isEmpty()) {
+            PostDto best = pickNextEligible(
+                    remaining,
+                    scoreByPost,
+                    lastAuthorId,
+                    sameAuthorStreak,
+                    reelStreak
+            );
+            result.add(best);
+            remaining.remove(best);
+
+            String currentAuthorId = best.getUserId();
+            boolean isReel = "reel".equalsIgnoreCase(best.getPostType());
+            sameAuthorStreak = Objects.equals(currentAuthorId, lastAuthorId) ? (sameAuthorStreak + 1) : 1;
+            reelStreak = isReel ? (reelStreak + 1) : 0;
+            lastAuthorId = currentAuthorId;
+        }
+        return result;
+    }
+
+    private PostDto pickNextEligible(
+            List<PostDto> remaining,
+            Map<PostDto, Double> scoreByPost,
+            String lastAuthorId,
+            int sameAuthorStreak,
+            int reelStreak) {
+        for (PostDto candidate : remaining) {
+            if (isCandidateAllowed(candidate, lastAuthorId, sameAuthorStreak, reelStreak)) {
+                return candidate;
+            }
+        }
+        // All candidates violate constraints: fail-open and keep highest score.
+        return remaining.stream()
+                .max(Comparator.comparingDouble(p -> scoreByPost.getOrDefault(p, 0.0)))
+                .orElse(remaining.get(0));
+    }
+
+    private boolean isCandidateAllowed(PostDto candidate, String lastAuthorId, int sameAuthorStreak, int reelStreak) {
+        boolean candidateIsReel = "reel".equalsIgnoreCase(candidate.getPostType());
+        boolean sameAuthor = Objects.equals(candidate.getUserId(), lastAuthorId);
+        if (sameAuthor && sameAuthorStreak >= maxConsecutiveSameAuthor) {
+            return false;
+        }
+        if (candidateIsReel && reelStreak >= maxConsecutiveReels) {
+            return false;
+        }
+        return true;
     }
 }
 

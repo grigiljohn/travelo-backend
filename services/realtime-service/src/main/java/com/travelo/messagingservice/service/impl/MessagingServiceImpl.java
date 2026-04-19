@@ -15,6 +15,8 @@ import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -478,7 +480,7 @@ public class MessagingServiceImpl implements MessagingService {
     }
 
     @Override
-    public List<ChatUserDto> searchUsers(String query, int page, int limit, UUID viewerId) {
+    public List<ChatUserDto> searchUsers(String query, int page, int limit, UUID viewerId, String authorization) {
         logger.info("Searching users with query: {}, page: {}, limit: {}, viewerId: {}", query, page, limit, viewerId);
         
         try {
@@ -498,11 +500,19 @@ public class MessagingServiceImpl implements MessagingService {
             
             logger.debug("Calling user-service at: {}", url);
             
-            // Call user-service
+            HttpHeaders headers = new HttpHeaders();
+            if (authorization != null && !authorization.isBlank()) {
+                headers.set(HttpHeaders.AUTHORIZATION, authorization.trim());
+            } else {
+                logger.warn("User search called without Authorization header; identity-service will reject the request");
+            }
+            HttpEntity<Void> requestEntity = new HttpEntity<>(headers);
+
+            // Call user-service (identity requires JWT on /api/v1/users/**)
             ResponseEntity<List<Map<String, Object>>> response = restTemplate.exchange(
                     url,
                     HttpMethod.GET,
-                    null,
+                    requestEntity,
                     new ParameterizedTypeReference<List<Map<String, Object>>>() {}
             );
             

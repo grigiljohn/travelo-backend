@@ -16,6 +16,7 @@ public interface MomentsService {
     MomentCreateResponse createMoment(
             String userId,
             String userName,
+            String idempotencyKey,
             String type,
             String mediaType,
             String caption,
@@ -63,6 +64,7 @@ public interface MomentsService {
             String action,
             String caption,
             String location,
-            String tags
+            String tags,
+            Double durationSec
     );
 }

@@ -1,6 +1,5 @@
 package com.travelo.mediaservice.service.impl;
 
-import com.travelo.mediaservice.config.LocalStorageProperties;
 import com.travelo.mediaservice.config.MediaKafkaProperties;
 import com.travelo.mediaservice.config.MediaS3Properties;
 import com.travelo.mediaservice.dto.*;
@@ -11,17 +10,24 @@ import com.travelo.mediaservice.event.MediaUploadedEvent;
 import com.travelo.mediaservice.exception.MediaFileNotFoundException;
 import com.travelo.mediaservice.repository.MediaFileRepository;
 import com.travelo.mediaservice.service.LocalStorageService;
+import com.travelo.mediaservice.service.MediaContentResolutionService;
 import com.travelo.mediaservice.service.MediaDownloadUrlBuilder;
+import com.travelo.mediaservice.service.MediaProcessingService;
 import com.travelo.mediaservice.service.MediaUploadService;
 import com.travelo.mediaservice.util.LocalStorageKeyGenerator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.Locale;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -33,26 +39,35 @@ public class MediaUploadServiceImpl implements MediaUploadService {
 
     private final MediaFileRepository mediaFileRepository;
     private final LocalStorageService localStorageService;
-    private final LocalStorageProperties storageProperties;
     private final MediaKafkaProperties kafkaProperties;
     private final KafkaTemplate<String, MediaUploadedEvent> kafkaTemplate;
+    private final ObjectProvider<MediaProcessingService> mediaProcessingServiceProvider;
     private final MediaS3Properties mediaS3Properties;
     private final MediaDownloadUrlBuilder downloadUrlBuilder;
+    private final MediaContentResolutionService contentResolutionService;
+    private final boolean enforceReadSafety;
+    private final boolean requireReadyStateForServing;
 
     public MediaUploadServiceImpl(MediaFileRepository mediaFileRepository,
                                   LocalStorageService localStorageService,
-                                  LocalStorageProperties storageProperties,
                                   MediaKafkaProperties kafkaProperties,
                                   KafkaTemplate<String, MediaUploadedEvent> kafkaTemplate,
+                                  ObjectProvider<MediaProcessingService> mediaProcessingServiceProvider,
                                   MediaS3Properties mediaS3Properties,
-                                  MediaDownloadUrlBuilder downloadUrlBuilder) {
+                                  MediaDownloadUrlBuilder downloadUrlBuilder,
+                                  MediaContentResolutionService contentResolutionService,
+                                  @org.springframework.beans.factory.annotation.Value("${media.moderation.enforce-read-safety:true}") boolean enforceReadSafety,
+                                  @org.springframework.beans.factory.annotation.Value("${media.moderation.require-ready-state-for-serving:true}") boolean requireReadyStateForServing) {
         this.mediaFileRepository = mediaFileRepository;
         this.localStorageService = localStorageService;
-        this.storageProperties = storageProperties;
         this.kafkaProperties = kafkaProperties;
         this.kafkaTemplate = kafkaTemplate;
+        this.mediaProcessingServiceProvider = mediaProcessingServiceProvider;
         this.mediaS3Properties = mediaS3Properties;
         this.downloadUrlBuilder = downloadUrlBuilder;
+        this.contentResolutionService = contentResolutionService;
+        this.enforceReadSafety = enforceReadSafety;
+        this.requireReadyStateForServing = requireReadyStateForServing;
     }
 
     @Override
@@ -99,20 +114,7 @@ public class MediaUploadServiceImpl implements MediaUploadService {
         media.setState(MediaStatus.PROCESSING);
         mediaFileRepository.save(media);
 
-        try {
-            MediaUploadedEvent event = new MediaUploadedEvent(
-                    media.getId().toString(),
-                    media.getOwnerId().toString(),
-                    media.getStorageBucket(),
-                    media.getStorageKey(),
-                    media.getMimeType(),
-                    media.getSizeBytes(),
-                    Instant.now()
-            );
-            //kafkaTemplate.send(kafkaProperties.getTopic(), media.getId().toString(), event);
-        } catch (Exception e) {
-            log.warn("Failed to send Kafka event for mediaId={}", media.getId(), e);
-        }
+        dispatchMediaProcessing(media);
 
         String downloadUrl = downloadUrlBuilder.buildUploadDownloadUrl(media.getId(), storageKey);
         log.info(
@@ -148,27 +150,16 @@ public class MediaUploadServiceImpl implements MediaUploadService {
         media.setState(MediaStatus.PROCESSING);
         mediaFileRepository.save(media);
 
-        try {
-            MediaUploadedEvent event = new MediaUploadedEvent(
-                    media.getId().toString(),
-                    media.getOwnerId().toString(),
-                    media.getStorageBucket(),
-                    media.getStorageKey(),
-                    media.getMimeType(),
-                    media.getSizeBytes(),
-                    Instant.now()
-            );
-            kafkaTemplate.send(kafkaProperties.getTopic(), media.getId().toString(), event);
-        } catch (Exception e) {
-            log.warn("Failed to send Kafka event for mediaId={}", mediaId, e);
-        }
+        dispatchMediaProcessing(media);
     }
 
     @Override
     @Transactional(readOnly = true)
     public MediaFile getMedia(UUID mediaId) {
-        return mediaFileRepository.findById(mediaId)
+        MediaFile media = mediaFileRepository.findById(mediaId)
                 .orElseThrow(() -> new MediaFileNotFoundException(mediaId));
+        validateReadable(media, false);
+        return media;
     }
 
     @Override
@@ -176,6 +167,7 @@ public class MediaUploadServiceImpl implements MediaUploadService {
     public VariantsResponse getVariants(UUID mediaId, boolean includeSignedUrls) {
         MediaFile media = mediaFileRepository.findById(mediaId)
                 .orElseThrow(() -> new MediaFileNotFoundException(mediaId));
+        validateReadable(media, true);
 
         List<MediaVariant> variants = media.getVariants() != null ? media.getVariants() : List.of();
         List<VariantsResponse.VariantInfo> variantInfos = variants.stream()
@@ -201,17 +193,12 @@ public class MediaUploadServiceImpl implements MediaUploadService {
     public DownloadUrlResponse generateDownloadUrl(UUID mediaId, String variant, Integer expiresInSeconds) {
         MediaFile media = mediaFileRepository.findById(mediaId)
                 .orElseThrow(() -> new MediaFileNotFoundException(mediaId));
+        validateReadable(media, true);
 
-        String path;
-        if (variant == null || variant.isEmpty()) {
-            path = media.getStorageKey();
-        } else {
-            path = media.getVariants().stream()
-                    .filter(v -> v != null && variant.equals(v.getName()))
-                    .map(MediaVariant::getKey)
-                    .filter(k -> k != null && !k.trim().isEmpty())
-                    .findFirst()
-                    .orElseThrow(() -> new IllegalArgumentException("Variant not found: " + variant));
+        MediaContentResolutionService.ResolvedContent resolved = contentResolutionService.resolve(media, variant);
+        String path = resolved.storageKey();
+        if (path == null) {
+            throw new IllegalArgumentException("Variant not found: " + variant);
         }
 
         if (!localStorageService.exists(path)) {
@@ -225,6 +212,21 @@ public class MediaUploadServiceImpl implements MediaUploadService {
                 variant != null && !variant.isEmpty() ? variant : null);
         int expiry = expiresInSeconds != null ? expiresInSeconds : 3600;
         return new DownloadUrlResponse(downloadUrl, expiry);
+    }
+
+    private void validateReadable(MediaFile media, boolean strictState) {
+        if (media == null) {
+            return;
+        }
+        String safety = media.getSafetyStatus() == null ? "unknown" : media.getSafetyStatus().trim().toLowerCase(Locale.ROOT);
+        if (enforceReadSafety && ("unsafe".equals(safety) || "review".equals(safety))) {
+            throw new SecurityException("Media blocked by moderation policy");
+        }
+        if (strictState && requireReadyStateForServing) {
+            if (media.getState() != MediaStatus.READY) {
+                throw new IllegalStateException("Media is not ready for serving");
+            }
+        }
     }
 
     @Override
@@ -245,6 +247,89 @@ public class MediaUploadServiceImpl implements MediaUploadService {
                 Instant.now()
         );
         kafkaTemplate.send(kafkaProperties.getTopic(), media.getId().toString(), event);
+    }
+
+    private void dispatchMediaProcessing(MediaFile media) {
+        boolean listenersEnabled = kafkaProperties.isListenersEnabled();
+        if (listenersEnabled) {
+            try {
+                MediaUploadedEvent event = new MediaUploadedEvent(
+                        media.getId().toString(),
+                        media.getOwnerId().toString(),
+                        media.getStorageBucket(),
+                        media.getStorageKey(),
+                        media.getMimeType(),
+                        media.getSizeBytes(),
+                        Instant.now()
+                );
+                kafkaTemplate.send(kafkaProperties.getTopic(), media.getId().toString(), event);
+                log.info("flow=media_upload processing dispatched via kafka mediaId={}", media.getId());
+                return;
+            } catch (Exception e) {
+                log.warn("Kafka dispatch failed for mediaId={}, falling back to inline processing", media.getId(), e);
+            }
+        }
+
+        MediaProcessingService processingService = mediaProcessingServiceProvider.getIfAvailable();
+        if (processingService == null) {
+            log.warn("No MediaProcessingService available for inline processing mediaId={}", media.getId());
+            return;
+        }
+        try {
+            processingService.processMedia(media.getId());
+            log.info("flow=media_upload processing completed inline mediaId={}", media.getId());
+        } catch (Exception e) {
+            log.error("Inline media processing failed mediaId={}", media.getId(), e);
+        }
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<MediaFile> getModerationQueue(int limit) {
+        int safeLimit = Math.max(1, Math.min(limit, 500));
+        List<MediaFile> byState = mediaFileRepository.findByStateIn(List.of(MediaStatus.REVIEW, MediaStatus.UNSAFE));
+        List<MediaFile> bySafety = mediaFileRepository.findBySafetyStatusIn(List.of("review", "unsafe"));
+        java.util.Map<UUID, MediaFile> merged = new java.util.LinkedHashMap<>();
+        for (MediaFile f : byState) {
+            merged.put(f.getId(), f);
+        }
+        for (MediaFile f : bySafety) {
+            merged.put(f.getId(), f);
+        }
+        return merged.values().stream()
+                .sorted(Comparator.comparing(MediaFile::getUpdatedAt, Comparator.nullsLast(Comparator.reverseOrder())))
+                .limit(safeLimit)
+                .toList();
+    }
+
+    @Override
+    @Transactional
+    public MediaFile applyModerationDecision(UUID mediaId, String decision, String reason, String reviewer) {
+        MediaFile media = mediaFileRepository.findById(mediaId)
+                .orElseThrow(() -> new MediaFileNotFoundException(mediaId));
+        String d = decision == null ? "" : decision.trim().toLowerCase(Locale.ROOT);
+        if (!"approve".equals(d) && !"reject".equals(d)) {
+            throw new IllegalArgumentException("decision must be one of: approve, reject");
+        }
+        if ("approve".equals(d)) {
+            media.setSafetyStatus("safe");
+            if (media.getState() != MediaStatus.INFECTED) {
+                media.setState(MediaStatus.READY);
+            }
+        } else {
+            media.setSafetyStatus("unsafe");
+            media.setState(MediaStatus.UNSAFE);
+        }
+
+        java.util.Map<String, Object> meta = media.getMeta() != null ? media.getMeta() : new HashMap<>();
+        meta.put("moderation_manual", java.util.Map.of(
+                "decision", d,
+                "reason", reason == null ? "" : reason,
+                "reviewer", reviewer == null ? "admin" : reviewer,
+                "timestamp", OffsetDateTime.now().toString()
+        ));
+        media.setMeta(meta);
+        return mediaFileRepository.save(media);
     }
 
     private static com.travelo.mediaservice.entity.MediaType mapMediaType(String mediaType) {

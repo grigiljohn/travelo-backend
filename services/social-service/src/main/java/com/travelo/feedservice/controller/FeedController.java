@@ -2,6 +2,7 @@ package com.travelo.feedservice.controller;
 
 import com.travelo.commons.security.SecurityUtils;
 import com.travelo.feedservice.dto.FeedResponse;
+import com.travelo.feedservice.dto.FeedRankingDebugResponse;
 import com.travelo.feedservice.dto.FeedUserEventsRequest;
 import com.travelo.feedservice.dto.MarkSeenRequest;
 import com.travelo.feedservice.service.FeedInteractionEventPublisher;
@@ -13,6 +14,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -33,14 +35,17 @@ public class FeedController {
     private final FeedService feedService;
     private final FeedSeenService feedSeenService;
     private final FeedInteractionEventPublisher feedInteractionEventPublisher;
+    private final boolean allowHeaderUserFallback;
 
     public FeedController(
             FeedService feedService,
             FeedSeenService feedSeenService,
-            FeedInteractionEventPublisher feedInteractionEventPublisher) {
+            FeedInteractionEventPublisher feedInteractionEventPublisher,
+            @Value("${app.dev.allow-header-user-fallback:false}") boolean allowHeaderUserFallback) {
         this.feedService = feedService;
         this.feedSeenService = feedSeenService;
         this.feedInteractionEventPublisher = feedInteractionEventPublisher;
+        this.allowHeaderUserFallback = allowHeaderUserFallback;
     }
 
     @GetMapping
@@ -49,6 +54,7 @@ public class FeedController {
     public ResponseEntity<FeedResponse> getFeed(
             @Parameter(description = "User ID (extracted from JWT if not provided)", required = false)
             @RequestParam(value = "userId", required = false) UUID userId,
+            @RequestHeader(value = "X-User-Id", required = false) String headerUserId,
             @Parameter(description = "Cursor for pagination (from next_cursor of previous response)", required = false)
             @RequestParam(value = "cursor", required = false) String cursor,
             @Parameter(description = "Number of items to retrieve", example = "10")
@@ -59,7 +65,7 @@ public class FeedController {
             @RequestParam(value = "surface", defaultValue = "home") String surface) {
         
         // Extract userId from JWT if not provided (for security)
-        UUID resolvedUserId = userId != null ? userId : SecurityUtils.getCurrentUserId();
+        UUID resolvedUserId = resolveUserId(userId, headerUserId, "getFeed");
         if (resolvedUserId == null) {
             logger.warn("No userId provided and user not authenticated");
             return ResponseEntity.badRequest().build();
@@ -73,6 +79,23 @@ public class FeedController {
         return ResponseEntity.ok(feedResponse);
     }
 
+    @GetMapping("/debug/ranking")
+    @Operation(summary = "Explain ranking", description = "Debug endpoint showing ranking component scores and online signal effects.")
+    public ResponseEntity<FeedRankingDebugResponse> debugRanking(
+            @RequestParam(value = "userId", required = false) UUID userId,
+            @RequestHeader(value = "X-User-Id", required = false) String headerUserId,
+            @RequestParam(value = "limit", defaultValue = "20") int limit,
+            @RequestParam(value = "mood", required = false) String mood,
+            @RequestParam(value = "surface", defaultValue = "home") String surface) {
+        UUID resolvedUserId = userId != null ? userId : SecurityUtils.getCurrentUserId();
+        resolvedUserId = resolveUserId(resolvedUserId, headerUserId, "debugRanking");
+        if (resolvedUserId == null) {
+            return ResponseEntity.badRequest().build();
+        }
+        FeedRankingDebugResponse response = feedService.debugRanking(resolvedUserId, limit, mood, surface);
+        return ResponseEntity.ok(response);
+    }
+
     @PostMapping("/seen")
     @Operation(summary = "Mark posts as seen", 
                description = "Mark posts as seen for a user on a specific surface. Used for seen-once feed filtering.")
@@ -82,14 +105,7 @@ public class FeedController {
             @RequestHeader(value = "X-User-Id", required = false) String headerUserId,
             @Valid @RequestBody MarkSeenRequest request) {
         // Resolve in this order: explicit query param -> JWT -> dev header fallback.
-        UUID userId = requestUserId != null ? requestUserId : SecurityUtils.getCurrentUserId();
-        if (userId == null && headerUserId != null && !headerUserId.isBlank()) {
-            try {
-                userId = UUID.fromString(headerUserId.trim());
-            } catch (IllegalArgumentException ignored) {
-                logger.warn("Invalid X-User-Id header for markPostsAsSeen: {}", headerUserId);
-            }
-        }
+        UUID userId = resolveUserId(requestUserId, headerUserId, "markPostsAsSeen");
         if (userId == null) {
             logger.warn("Unauthenticated attempt to mark posts as seen");
             return ResponseEntity.status(401).build();
@@ -121,14 +137,7 @@ public class FeedController {
             @RequestParam(value = "userId", required = false) UUID requestUserId,
             @RequestHeader(value = "X-User-Id", required = false) String headerUserId,
             @Valid @RequestBody FeedUserEventsRequest request) {
-        UUID userId = requestUserId != null ? requestUserId : SecurityUtils.getCurrentUserId();
-        if (userId == null && headerUserId != null && !headerUserId.isBlank()) {
-            try {
-                userId = UUID.fromString(headerUserId.trim());
-            } catch (IllegalArgumentException ignored) {
-                logger.warn("Invalid X-User-Id header for recordFeedEvents: {}", headerUserId);
-            }
-        }
+        UUID userId = resolveUserId(requestUserId, headerUserId, "recordFeedEvents");
         if (userId == null) {
             return ResponseEntity.status(401).build();
         }
@@ -151,6 +160,18 @@ public class FeedController {
         feedService.refreshFeed(userId);
         
         return ResponseEntity.ok().build();
+    }
+
+    private UUID resolveUserId(UUID requestUserId, String headerUserId, String context) {
+        UUID userId = requestUserId != null ? requestUserId : SecurityUtils.getCurrentUserId();
+        if (userId == null && allowHeaderUserFallback && headerUserId != null && !headerUserId.isBlank()) {
+            try {
+                userId = UUID.fromString(headerUserId.trim());
+            } catch (IllegalArgumentException ignored) {
+                logger.warn("Invalid X-User-Id header for {}: {}", context, headerUserId);
+            }
+        }
+        return userId;
     }
 }
 

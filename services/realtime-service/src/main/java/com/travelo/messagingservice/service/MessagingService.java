@@ -40,7 +40,10 @@ public interface MessagingService {
     
     List<MessageDto> searchMessages(UUID conversationId, UUID userId, String query, int page, int limit);
     
-    List<ChatUserDto> searchUsers(String query, int page, int limit, UUID viewerId);
+    /**
+     * @param authorization optional {@code Authorization} header value (e.g. {@code Bearer ...}) to forward to user-service
+     */
+    List<ChatUserDto> searchUsers(String query, int page, int limit, UUID viewerId, String authorization);
     
     Long getTotalUnreadCount(UUID userId);
 }

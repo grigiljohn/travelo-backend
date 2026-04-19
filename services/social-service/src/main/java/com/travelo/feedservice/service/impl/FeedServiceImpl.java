@@ -8,8 +8,12 @@ import com.travelo.feedservice.client.dto.AdDeliveryResponse;
 import com.travelo.feedservice.client.dto.PostDto;
 import com.travelo.feedservice.client.dto.StoryPreviewDto;
 import com.travelo.feedservice.dto.FeedItem;
+import com.travelo.feedservice.dto.FeedRankingDebugItem;
+import com.travelo.feedservice.dto.FeedRankingDebugResponse;
 import com.travelo.feedservice.dto.FeedResponse;
 import com.travelo.feedservice.service.FeedCacheService;
+import com.travelo.feedservice.service.FeedMetricsService;
+import com.travelo.feedservice.service.FeedRealtimeSignalService;
 import com.travelo.feedservice.service.FeedRankingService;
 import com.travelo.feedservice.service.FeedSeenService;
 import com.travelo.feedservice.service.FeedService;
@@ -35,6 +39,8 @@ public class FeedServiceImpl implements FeedService {
     private final StoryServiceClient storyServiceClient;
     private final UserServiceClient userServiceClient;
     private final FeedRankingService feedRankingService;
+    private final FeedRealtimeSignalService feedRealtimeSignalService;
+    private final FeedMetricsService feedMetricsService;
     private final FeedCacheService feedCacheService;
     private final FeedSeenService feedSeenService;
     
@@ -57,6 +63,8 @@ public class FeedServiceImpl implements FeedService {
             StoryServiceClient storyServiceClient,
             UserServiceClient userServiceClient,
             FeedRankingService feedRankingService,
+            FeedRealtimeSignalService feedRealtimeSignalService,
+            FeedMetricsService feedMetricsService,
             FeedCacheService feedCacheService,
             FeedSeenService feedSeenService,
             @Value("${app.feed.cache-enabled:true}") boolean cacheEnabled,
@@ -67,6 +75,8 @@ public class FeedServiceImpl implements FeedService {
         this.storyServiceClient = storyServiceClient;
         this.userServiceClient = userServiceClient;
         this.feedRankingService = feedRankingService;
+        this.feedRealtimeSignalService = feedRealtimeSignalService;
+        this.feedMetricsService = feedMetricsService;
         this.feedCacheService = feedCacheService;
         this.feedSeenService = feedSeenService;
         this.cacheEnabled = cacheEnabled;
@@ -76,8 +86,9 @@ public class FeedServiceImpl implements FeedService {
 
     @Override
     public FeedResponse getFeed(UUID userId, String cursor, int limit, String mood, String surface) {
-        logger.info("Getting feed for userId={}, cursor={}, limit={}, mood={}, surface={}", 
-                userId, cursor, limit, mood, surface);
+        return feedMetricsService.timeGetFeed(surface, () -> {
+            logger.info("Getting feed for userId={}, cursor={}, limit={}, mood={}, surface={}",
+                    userId, cursor, limit, mood, surface);
 
         // Fetch more items to account for seen filtering and ads
         // Buffer size: 2x limit to ensure we have enough after filtering
@@ -95,7 +106,7 @@ public class FeedServiceImpl implements FeedService {
                 feedItems = cachedItems;
             } else {
                 // Cache miss or insufficient items, compute feed
-                feedItems = computeFeed(userId, fetchLimit, mood);
+                feedItems = computeFeed(userId, fetchLimit, mood, surface);
                 // Cache the computed feed (without seen filtering, as seen state changes)
                 if (cacheEnabled && feedItems.size() > 0) {
                     feedCacheService.cacheFeed(userId, feedItems);
@@ -103,7 +114,7 @@ public class FeedServiceImpl implements FeedService {
             }
         } else {
             // Compute feed on the fly
-            feedItems = computeFeed(userId, fetchLimit, mood);
+            feedItems = computeFeed(userId, fetchLimit, mood, surface);
             // Cache the computed feed (without seen filtering)
             if (cacheEnabled && feedItems.size() > 0) {
                 feedCacheService.cacheFeed(userId, feedItems);
@@ -114,11 +125,58 @@ public class FeedServiceImpl implements FeedService {
         // CRITICAL: Filter seen posts BEFORE cursor pagination
         // This ensures cursor pagination works correctly with seen filtering
         feedItems = filterSeenPosts(userId, surface, feedItems);
+        feedItems = feedRealtimeSignalService.applySessionFatigue(userId, surface, feedItems);
 
         // Apply cursor pagination AFTER filtering
         List<FeedItem> paginatedItems = applyCursorPagination(feedItems, cursor, limit);
+        feedRealtimeSignalService.recordServedItems(userId, surface, paginatedItems);
         
-        return buildFeedResponse(paginatedItems, limit);
+            long contentCount = paginatedItems.stream()
+                    .filter(item -> "post".equals(item.getType()) || "reel".equals(item.getType()))
+                    .count();
+            long adCount = paginatedItems.stream()
+                    .filter(item -> "ad".equals(item.getType()))
+                    .count();
+            feedMetricsService.recordFeedServed(
+                    surface,
+                    paginatedItems.size(),
+                    (int) contentCount,
+                    (int) adCount
+            );
+            return buildFeedResponse(paginatedItems, limit);
+        });
+    }
+
+    @Override
+    public FeedRankingDebugResponse debugRanking(UUID userId, int limit, String mood, String surface) {
+        int fetchLimit = Math.min(Math.max(limit, 1) * 3, MAX_FEED_COMPUTATION_LIMIT);
+        List<UUID> followedUserIds = userServiceClient.getFollowing(userId);
+        Set<String> followedSet = followedUserIds.stream().map(UUID::toString).collect(Collectors.toSet());
+        List<PostDto> posts = fetchPosts(fetchLimit, mood, followedUserIds);
+        List<PostDto> ranked = feedRankingService.rankPosts(posts, userId, followedUserIds);
+
+        List<FeedRankingDebugItem> debugItems = ranked.stream()
+                .limit(Math.max(1, limit))
+                .map(p -> {
+                    boolean following = p != null && followedSet.contains(p.getUserId());
+                    FeedRankingDebugItem item = feedRankingService.buildDebugItem(p, userId, following);
+                    double onlineSignal = feedRealtimeSignalService.getOnlineSignalScore(userId, surface, p.getId());
+                    item.setOnlineSignalScore(onlineSignal);
+                    item.setFinalScore(item.getBaseScore() + onlineSignal * 0.25d);
+                    return item;
+                })
+                .collect(Collectors.toList());
+
+        FeedRankingDebugResponse response = new FeedRankingDebugResponse();
+        response.setSurface(surface);
+        response.setMood(mood);
+        response.setRequestedLimit(limit);
+        response.setItems(debugItems);
+        response.setConfig(Map.of(
+                "note", "final_score includes online signal boost with configured weight",
+                "item_count", debugItems.size()
+        ));
+        return response;
     }
 
     @Override
@@ -155,7 +213,7 @@ public class FeedServiceImpl implements FeedService {
     /**
      * Compute personalized feed from scratch.
      */
-    private List<FeedItem> computeFeed(UUID userId, int limit, String mood) {
+    private List<FeedItem> computeFeed(UUID userId, int limit, String mood, String surface) {
         logger.debug("Computing feed for user {} with limit {}", userId, limit);
 
         // Step 1: Get following list
@@ -184,6 +242,7 @@ public class FeedServiceImpl implements FeedService {
         );
 
         List<PostDto> rankedPosts = rankedFuture.join();
+        rankedPosts = feedRealtimeSignalService.applyOnlineSignals(userId, surface, rankedPosts);
         logger.debug("Ranked {} posts", rankedPosts.size());
         List<AdDeliveryResponse> ads = adsFuture.join();
         logger.debug("Fetched {} ads", ads.size());

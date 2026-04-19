@@ -17,5 +17,9 @@ public interface MediaFileRepository extends JpaRepository<MediaFile, UUID> {
     long countByState(MediaStatus state);
 
     List<MediaFile> findByState(MediaStatus state);
+
+    List<MediaFile> findByStateIn(List<MediaStatus> states);
+
+    List<MediaFile> findBySafetyStatusIn(List<String> safetyStatuses);
 }
 

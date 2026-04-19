@@ -21,6 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -110,7 +111,7 @@ public class PostServiceImpl implements PostService {
         if (!isTextPost) {
             post.setCaption(request.caption());
         }
-        post.setMood(MoodType.valueOf(request.mood().toUpperCase()));
+        post.setMood(parseMood(request.mood()));
         post.setLocation(request.location());
         post.setMusicTrack(request.musicTrack());
         if (request.visibility() != null && !request.visibility().isBlank()) {
@@ -346,6 +347,18 @@ public class PostServiceImpl implements PostService {
                 // New: Using media-service media ID
                 String url = request.url(); // Use provided URL if available
                 String thumbnailUrl = request.thumbnailUrl();
+                com.travelo.postservice.client.dto.MediaFileResponse mediaMeta;
+
+                try {
+                    mediaMeta = mediaServiceClient.getMedia(request.mediaId());
+                } catch (Exception e) {
+                    logger.warn("Failed to fetch media metadata for mediaId={}, refusing attachment", request.mediaId(), e);
+                    throw new IllegalArgumentException("Media not available for attachment: " + request.mediaId());
+                }
+                if (mediaMeta == null) {
+                    throw new IllegalArgumentException("Media not found for attachment: " + request.mediaId());
+                }
+                ensureMediaAllowedForPost(mediaMeta, request.mediaId());
 
                 // If URLs not provided, fetch from media-service
                 if (url == null) {
@@ -419,30 +432,22 @@ public class PostServiceImpl implements PostService {
                         request.position() != null ? request.position() : i
                 );
                 mediaItem.setThumbnailUrl(thumbnailUrl);
-                // Try to get metadata from media-service
-                try {
-                    var mediaMeta = mediaServiceClient.getMedia(request.mediaId());
-                    if (mediaMeta != null) {
-                        if (request.width() == null) {
-                            // Try to get from variants or meta
-                            if (mediaMeta.variants() != null && !mediaMeta.variants().isEmpty()) {
-                                var firstVariant = mediaMeta.variants().get(0);
-                                mediaItem.setWidth(firstVariant.width());
-                                mediaItem.setHeight(firstVariant.height());
-                            }
-                        }
-                        if (request.duration() == null && mediaMeta.variants() != null) {
-                            var videoVariant = mediaMeta.variants().stream()
-                                    .filter(v -> v.duration() != null)
-                                    .findFirst()
-                                    .orElse(null);
-                            if (videoVariant != null) {
-                                mediaItem.setDuration(videoVariant.duration().intValue());
-                            }
-                        }
+                if (request.width() == null) {
+                    // Try to get from variants or meta
+                    if (mediaMeta.variants() != null && !mediaMeta.variants().isEmpty()) {
+                        var firstVariant = mediaMeta.variants().get(0);
+                        mediaItem.setWidth(firstVariant.width());
+                        mediaItem.setHeight(firstVariant.height());
                     }
-                } catch (Exception e) {
-                    logger.debug("Could not fetch media metadata, using provided values", e);
+                }
+                if (request.duration() == null && mediaMeta.variants() != null) {
+                    var videoVariant = mediaMeta.variants().stream()
+                            .filter(v -> v.duration() != null)
+                            .findFirst()
+                            .orElse(null);
+                    if (videoVariant != null) {
+                        mediaItem.setDuration(videoVariant.duration().intValue());
+                    }
                 }
             } else {
                 // Legacy: Using direct URL
@@ -485,6 +490,17 @@ public class PostServiceImpl implements PostService {
         return mediaItems;
     }
 
+    private void ensureMediaAllowedForPost(com.travelo.postservice.client.dto.MediaFileResponse mediaMeta, UUID mediaId) {
+        String safety = mediaMeta.safetyStatus() == null ? "unknown" : mediaMeta.safetyStatus().trim().toLowerCase(Locale.ROOT);
+        String state = mediaMeta.state() == null ? "unknown" : mediaMeta.state().trim().toLowerCase(Locale.ROOT);
+        if ("unsafe".equals(safety) || "review".equals(safety)) {
+            throw new IllegalArgumentException("Media blocked by moderation policy: " + mediaId);
+        }
+        if (!"ready".equals(state)) {
+            throw new IllegalArgumentException("Media is not ready for publishing: " + mediaId);
+        }
+    }
+
     private void savePostTags(Post post, List<String> tags) {
         if (tags != null && !tags.isEmpty()) {
             logger.debug("Saving {} tags for post ID: {}", tags.size(), post.getId());
@@ -520,7 +536,7 @@ public class PostServiceImpl implements PostService {
         Page<Post> postPage;
         if (!authorIds.isEmpty()) {
             if (mood != null && !mood.isEmpty()) {
-                MoodType moodType = MoodType.valueOf(mood.toUpperCase());
+                MoodType moodType = parseMood(mood);
                 logger.debug("Filtering posts by followed authors (count={}) and mood {}", authorIds.size(), moodType);
                 postPage = postRepository.findByUserIdInAndMoodAndDeletedAtIsNull(authorIds, moodType, pageable);
             } else {
@@ -528,7 +544,7 @@ public class PostServiceImpl implements PostService {
                 postPage = postRepository.findByUserIdInAndDeletedAtIsNull(authorIds, pageable);
             }
         } else if (mood != null && !mood.isEmpty()) {
-            MoodType moodType = MoodType.valueOf(mood.toUpperCase());
+            MoodType moodType = parseMood(mood);
             logger.debug("Filtering posts by mood: {}", moodType);
             postPage = postRepository.findByMoodAndDeletedAtIsNull(moodType, pageable);
         } else {
@@ -901,6 +917,19 @@ public class PostServiceImpl implements PostService {
                     userId, e.getClass().getSimpleName(), e.getMessage(), e);
             dto.setUsername("Unknown User");
             dto.setUserAvatar("");
+        }
+    }
+
+    private static MoodType parseMood(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return MoodType.NEUTRAL;
+        }
+        String key = raw.trim().toUpperCase(Locale.ROOT);
+        try {
+            return MoodType.valueOf(key);
+        } catch (IllegalArgumentException e) {
+            logger.warn("Unknown mood '{}', using NEUTRAL", raw);
+            return MoodType.NEUTRAL;
         }
     }
 }

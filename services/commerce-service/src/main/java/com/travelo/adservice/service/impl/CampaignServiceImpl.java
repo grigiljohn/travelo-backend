@@ -36,8 +36,17 @@ public class CampaignServiceImpl implements CampaignService {
         Pageable pageable = PageRequest.of(page, size, Sort.Direction.fromString(direction), sort);
         
         Page<Campaign> campaignPage;
-        if (status != null) {
+        boolean hasSearch = search != null && !search.isBlank();
+        if (status != null && hasSearch) {
+            campaignPage = campaignRepository.findByBusinessAccountIdAndStatusAndSearch(
+                    businessAccountId, status, search.trim(), pageable
+            );
+        } else if (status != null) {
             campaignPage = campaignRepository.findByBusinessAccountIdAndStatus(businessAccountId, status, pageable);
+        } else if (hasSearch) {
+            campaignPage = campaignRepository.findByBusinessAccountIdAndSearch(
+                    businessAccountId, search.trim(), pageable
+            );
         } else {
             campaignPage = campaignRepository.findByBusinessAccountId(businessAccountId, pageable);
         }

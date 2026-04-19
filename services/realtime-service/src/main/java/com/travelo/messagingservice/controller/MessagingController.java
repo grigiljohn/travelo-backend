@@ -9,6 +9,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -223,7 +224,8 @@ public class MessagingController {
     public ResponseEntity<List<ChatUserDto>> searchUsers(
             @RequestParam("q") String query,
             @RequestParam(value = "page", defaultValue = "1") int page,
-            @RequestParam(value = "limit", defaultValue = "20") @Max(100) int limit) {
+            @RequestParam(value = "limit", defaultValue = "20") @Max(100) int limit,
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization) {
         // Extract viewer_id from JWT for follow status
         UUID viewerId = null;
         try {
@@ -232,7 +234,7 @@ public class MessagingController {
             logger.debug("Could not extract viewer_id from JWT: {}", e.getMessage());
         }
         logger.info("GET /api/v1/users/search - q={}, viewerId={}", query, viewerId);
-        return ResponseEntity.ok(messagingService.searchUsers(query, page, limit, viewerId));
+        return ResponseEntity.ok(messagingService.searchUsers(query, page, limit, viewerId, authorization));
     }
     
     @PatchMapping("/messages/{messageId}/delivered")

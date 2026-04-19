@@ -20,8 +20,9 @@ public class ThumbnailServiceImpl implements ThumbnailService {
     private static final Logger log = LoggerFactory.getLogger(ThumbnailServiceImpl.class);
     private static final String FFMPEG_COMMAND = "ffmpeg";
     private static final String TEMP_DIR = System.getProperty("java.io.tmpdir");
-    private static final int THUMBNAIL_WIDTH = 640;
-    private static final int THUMBNAIL_HEIGHT = 360;
+    /** Feed-quality poster frame (16:9 padded), matches high-DPI phone screens. */
+    private static final int THUMBNAIL_WIDTH = 1280;
+    private static final int THUMBNAIL_HEIGHT = 720;
     private static final double THUMBNAIL_TIME_OFFSET = 1.0;
 
     private final LocalStorageService localStorageService;

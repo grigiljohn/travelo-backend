@@ -57,4 +57,15 @@ public interface MediaUploadService {
      * Reprocess a media file (admin operation).
      */
     void reprocess(UUID mediaId, List<String> processingSteps);
+
+    /**
+     * Admin moderation queue.
+     */
+    List<MediaFile> getModerationQueue(int limit);
+
+    /**
+     * Admin moderation decision.
+     * decision: approve | reject
+     */
+    MediaFile applyModerationDecision(UUID mediaId, String decision, String reason, String reviewer);
 }

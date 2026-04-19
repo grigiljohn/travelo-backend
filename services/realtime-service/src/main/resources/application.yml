@@ -50,6 +50,8 @@ realtime:
       connection-test-query: SELECT 1
       validate-on-connection: false
   notification:
+    # Same DB as messaging by default: Flyway uses its own history table (see NotificationFlywayConfiguration)
+    # so notification scripts are not skipped when messaging V1/V2 already claimed version slots.
     flyway-schema: ${NOTIFICATION_FLYWAY_SCHEMA:public}
     hibernate-default-schema: ${NOTIFICATION_HIBERNATE_SCHEMA:public}
 

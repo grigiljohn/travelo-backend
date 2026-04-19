@@ -2,6 +2,7 @@ package com.travelo.feedservice.service.impl;
 
 import com.travelo.feedservice.dto.FeedUserEventDto;
 import com.travelo.feedservice.service.FeedInteractionEventPublisher;
+import com.travelo.feedservice.service.FeedRealtimeSignalService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,6 +22,7 @@ public class FeedInteractionEventPublisherImpl implements FeedInteractionEventPu
     private static final Logger logger = LoggerFactory.getLogger(FeedInteractionEventPublisherImpl.class);
 
     private final KafkaTemplate<String, Object> kafkaTemplate;
+    private final FeedRealtimeSignalService feedRealtimeSignalService;
 
     @Value("${app.feed.events.kafka-enabled:false}")
     private boolean kafkaEnabled;
@@ -29,8 +31,10 @@ public class FeedInteractionEventPublisherImpl implements FeedInteractionEventPu
     private String kafkaTopic;
 
     public FeedInteractionEventPublisherImpl(
-            @Autowired(required = false) KafkaTemplate<String, Object> kafkaTemplate) {
+            @Autowired(required = false) KafkaTemplate<String, Object> kafkaTemplate,
+            FeedRealtimeSignalService feedRealtimeSignalService) {
         this.kafkaTemplate = kafkaTemplate;
+        this.feedRealtimeSignalService = feedRealtimeSignalService;
     }
 
     @Override
@@ -54,6 +58,7 @@ public class FeedInteractionEventPublisherImpl implements FeedInteractionEventPu
                     e.getItemType(),
                     e.getTargetId());
         }
+        feedRealtimeSignalService.recordUserEvents(userId, surface, events);
 
         if (!kafkaEnabled || kafkaTemplate == null) {
             return;

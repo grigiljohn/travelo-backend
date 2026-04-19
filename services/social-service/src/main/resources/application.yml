@@ -159,10 +159,32 @@ app:
   recommendation-service:
     url: ${RECOMMENDATION_SERVICE_URL:http://localhost:8091}
   feed:
-    cache-enabled: ${FEED_CACHE_ENABLED:true}
+    cache-enabled: ${FEED_CACHE_ENABLED:false}
     cache-ttl-seconds: ${FEED_CACHE_TTL:3600}
     fan-out-enabled: ${FEED_FANOUT_ENABLED:true}
+    seen-enabled: ${FEED_SEEN_ENABLED:false}
+    mock-fallback-enabled: ${FEED_MOCK_FALLBACK_ENABLED:true}
+    mock-fallback-mode: ${FEED_MOCK_FALLBACK_MODE:on_error} # off | on_error | always
     recommended-prefetch-limit: ${FEED_RECOMMENDED_PREFETCH_LIMIT:12}
+    ranking:
+      weights:
+        recency: ${FEED_RANKING_WEIGHT_RECENCY:0.35}
+        affinity: ${FEED_RANKING_WEIGHT_AFFINITY:0.30}
+        popularity: ${FEED_RANKING_WEIGHT_POPULARITY:0.25}
+        content-type: ${FEED_RANKING_WEIGHT_CONTENT_TYPE:0.10}
+      following-boost: ${FEED_RANKING_FOLLOWING_BOOST:2.0}
+      reel-boost: ${FEED_RANKING_REEL_BOOST:1.5}
+      non-following-affinity-score: ${FEED_RANKING_NON_FOLLOWING_AFFINITY:0.5}
+      recency-half-life-hours: ${FEED_RANKING_RECENCY_HALF_LIFE_HOURS:24.0}
+    diversity:
+      max-consecutive-same-author: ${FEED_DIVERSITY_MAX_CONSECUTIVE_SAME_AUTHOR:2}
+      max-consecutive-reels: ${FEED_DIVERSITY_MAX_CONSECUTIVE_REELS:2}
+    online-signals:
+      enabled: ${FEED_ONLINE_SIGNALS_ENABLED:true}
+      signal-ttl-minutes: ${FEED_ONLINE_SIGNALS_TTL_MINUTES:180}
+      weight: ${FEED_ONLINE_SIGNALS_WEIGHT:0.25}
+      author-window-ttl-minutes: ${FEED_ONLINE_SIGNALS_AUTHOR_WINDOW_TTL_MINUTES:45}
+      author-fatigue-penalty-per-exposure: ${FEED_ONLINE_SIGNALS_AUTHOR_FATIGUE_PENALTY:0.12}
     events:
       kafka-enabled: ${FEED_EVENTS_KAFKA_ENABLED:false}
       kafka-topic: ${FEED_EVENTS_KAFKA_TOPIC:feed.user_events}
@@ -174,6 +196,17 @@ services:
 moments:
   storage:
     local-dir: ${MOMENTS_LOCAL_DIR:C:/temp/travelo-moments}
+  idempotency:
+    ttl-hours: ${MOMENTS_IDEMPOTENCY_TTL_HOURS:24}
+  ai:
+    openai:
+      # Set OPENAI_ENABLED=true and OPENAI_API_KEY for LLM caption/tags/filter (timeline stays heuristic).
+      enabled: ${OPENAI_ENABLED:false}
+      api-key: ${OPENAI_API_KEY:}
+      base-url: ${OPENAI_BASE_URL:https://api.openai.com/v1}
+      model: ${OPENAI_MODEL:gpt-4o-mini}
+      timeout-seconds: ${OPENAI_TIMEOUT_SECONDS:15}
+      max-tokens: ${OPENAI_MAX_TOKENS:400}
 
 reel:
   kafka:

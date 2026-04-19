@@ -76,6 +76,7 @@ public class MomentsController {
             @RequestParam(value = "mediaDurationsJson", defaultValue = "[]") String mediaDurationsJson,
             @RequestParam(value = "editorMetadataJson", defaultValue = "") String editorMetadataJson,
             @RequestParam(value = "audience", defaultValue = "followers") String audience,
+            @RequestHeader(value = "X-Idempotency-Key", required = false) String idempotencyKey,
             @RequestHeader(value = "X-User-Id", required = false) String headerUserId,
             @RequestHeader(value = "X-User-Name", required = false) String headerUserName,
             @RequestParam(value = "files", required = false) List<MultipartFile> files
@@ -110,6 +111,7 @@ public class MomentsController {
         final MomentCreateResponse response = momentsService.createMoment(
                 effectiveUserId,
                 effectiveUserName,
+                idempotencyKey,
                 type,
                 mediaType,
                 caption,
@@ -159,10 +161,11 @@ public class MomentsController {
             @RequestParam(value = "action", defaultValue = "caption") String action,
             @RequestParam(value = "caption", defaultValue = "") String caption,
             @RequestParam(value = "location", defaultValue = "") String location,
-            @RequestParam(value = "tags", defaultValue = "") String tags
+            @RequestParam(value = "tags", defaultValue = "") String tags,
+            @RequestParam(value = "durationSec", required = false) Double durationSec
     ) {
-        logger.info("POST /api/v1/moments/ai/suggest - action={}", action);
-        return ResponseEntity.ok(momentsService.suggestAiEdits(action, caption, location, tags));
+        logger.info("POST /api/v1/moments/ai/suggest - action={} durationSec={}", action, durationSec);
+        return ResponseEntity.ok(momentsService.suggestAiEdits(action, caption, location, tags, durationSec));
     }
 
     @GetMapping("/{momentId}")

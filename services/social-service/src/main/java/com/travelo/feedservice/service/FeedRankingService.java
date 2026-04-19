@@ -1,6 +1,7 @@
 package com.travelo.feedservice.service;
 
 import com.travelo.feedservice.client.dto.PostDto;
+import com.travelo.feedservice.dto.FeedRankingDebugItem;
 
 import java.util.List;
 import java.util.UUID;
@@ -29,5 +30,10 @@ public interface FeedRankingService {
      * Calculate a single post's ranking score.
      */
     double calculateScore(PostDto post, UUID userId, boolean isFollowingAuthor);
+
+    /**
+     * Build component-level breakdown for ranking explainability.
+     */
+    FeedRankingDebugItem buildDebugItem(PostDto post, UUID userId, boolean isFollowingAuthor);
 }
 

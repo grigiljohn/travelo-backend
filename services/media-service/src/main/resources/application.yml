@@ -134,6 +134,20 @@ media:
   # POST /api/debug/upload-test — multipart smoke test for local or S3. Set false in production.
   debug:
     upload-test-enabled: ${MEDIA_DEBUG_UPLOAD_TEST:true}
+  moderation:
+    provider-mode: ${MEDIA_MODERATION_PROVIDER_MODE:mock_keywords} # mock_keywords | aws_rekognition | allow_all
+    admin-token: ${MEDIA_MODERATION_ADMIN_TOKEN:}
+    enforce-read-safety: ${MEDIA_MODERATION_ENFORCE_READ_SAFETY:true}
+    require-ready-state-for-serving: ${MEDIA_MODERATION_REQUIRE_READY_STATE:true}
+    unsafe-threshold: ${MEDIA_MODERATION_UNSAFE_THRESHOLD:0.85}
+    review-threshold: ${MEDIA_MODERATION_REVIEW_THRESHOLD:0.55}
+    aws:
+      min-confidence: ${MEDIA_MODERATION_AWS_MIN_CONFIDENCE:60}
+      fail-open: ${MEDIA_MODERATION_AWS_FAIL_OPEN:false}
+    keywords:
+      hate: ${MEDIA_MODERATION_KEYWORDS_HATE:hate,slur,racist}
+      violence: ${MEDIA_MODERATION_KEYWORDS_VIOLENCE:violence,gore,blood,kill,weapon}
+      sexual: ${MEDIA_MODERATION_KEYWORDS_SEXUAL:nsfw,nude,porn,sex,explicit}
 
 # Music catalog S3 (separate bucket/prefix from media.storage.s3). APIs: /api/v1/music/**
 music:

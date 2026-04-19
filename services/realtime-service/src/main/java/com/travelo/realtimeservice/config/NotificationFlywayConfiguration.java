@@ -16,9 +16,13 @@ public class NotificationFlywayConfiguration {
     public Flyway notificationFlyway(
             @Qualifier("notificationDataSource") DataSource notificationDataSource,
             @Value("${realtime.notification.flyway-schema:public}") String flywaySchema) {
+        // Use a dedicated Flyway history table. Messaging Flyway uses the same DB and default
+        // `flyway_schema_history`; without this, notification V1 is skipped after messaging V1/V2
+        // (version numbers collide), and Hibernate validate fails on missing tables like device_tokens.
         FluentConfiguration cfg = Flyway.configure()
                 .dataSource(notificationDataSource)
                 .locations("classpath:db/migration/notification")
+                .table("flyway_schema_history_notification")
                 .baselineOnMigrate(true)
                 .validateOnMigrate(false);
 

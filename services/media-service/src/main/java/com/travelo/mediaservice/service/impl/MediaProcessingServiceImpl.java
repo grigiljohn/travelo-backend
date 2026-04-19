@@ -22,10 +22,15 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
+import javax.imageio.ImageWriteParam;
+import javax.imageio.ImageWriter;
+import javax.imageio.stream.ImageOutputStream;
 import java.awt.*;
 import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
+import java.util.Iterator;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -34,6 +39,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
@@ -43,6 +49,8 @@ public class MediaProcessingServiceImpl implements MediaProcessingService {
     private static final Logger log = LoggerFactory.getLogger(MediaProcessingServiceImpl.class);
     private static final String TEMP_DIR = System.getProperty("java.io.tmpdir");
     private static final String FFMPEG_COMMAND = "ffmpeg";
+    private static final int IMAGE_PREVIEW_MAX_PX = 2048;
+    private static final int IMAGE_THUMB_MAX_PX = 540;
     private final MediaFileRepository mediaFileRepository;
     private final VirusScanService virusScanService;
     private final MediaModerationService moderationService;
@@ -103,9 +111,24 @@ public class MediaProcessingServiceImpl implements MediaProcessingService {
                 }
             }
 
-            if (shouldProcessStep(processingSteps, "transcode") &&
-                (media.getMediaType() == MediaType.VIDEO || media.getMediaType() == MediaType.AUDIO)) {
-                // TODO: transcoding
+            if (shouldProcessStep(processingSteps, "transcode") && media.getMediaType() == MediaType.IMAGE) {
+                try {
+                    generateImageDeliveryVariants(media);
+                    media = mediaFileRepository.findById(mediaId).orElseThrow(() -> new MediaFileNotFoundException(mediaId));
+                } catch (Exception e) {
+                    log.warn("Image delivery variants failed mediaId={}", mediaId, e);
+                    media.getMeta().put("image_variants_error", e.getMessage());
+                }
+            }
+
+            if (shouldProcessStep(processingSteps, "transcode") && media.getMediaType() == MediaType.VIDEO) {
+                try {
+                    transcodeVideoToPlayback(media);
+                    media = mediaFileRepository.findById(mediaId).orElseThrow(() -> new MediaFileNotFoundException(mediaId));
+                } catch (Exception e) {
+                    log.warn("Video transcode failed mediaId={}", mediaId, e);
+                    media.getMeta().put("transcode_error", e.getMessage());
+                }
             }
 
             if (shouldProcessStep(processingSteps, "thumbnail") && media.getMediaType() == MediaType.VIDEO) {
@@ -331,6 +354,181 @@ public class MediaProcessingServiceImpl implements MediaProcessingService {
         } catch (Exception e) {
             log.error("Error rotating image: mediaId={}", mediaId, e);
             return null;
+        }
+    }
+
+    private void generateImageDeliveryVariants(MediaFile media) throws IOException {
+        String mime = media.getMimeType();
+        if (mime != null && mime.toLowerCase(Locale.ROOT).contains("gif")) {
+            log.info("Skipping JPEG variants for GIF original mediaId={}", media.getId());
+            return;
+        }
+        File src = localStorageService.getFile(media.getStorageKey());
+        if (src == null || !src.exists()) {
+            throw new IOException("Image blob missing: " + media.getStorageKey());
+        }
+        BufferedImage raw = ImageIO.read(src);
+        if (raw == null) {
+            throw new IOException("Unsupported or corrupt image");
+        }
+        BufferedImage rgb = toRgb(raw);
+        BufferedImage preview = scaleDownMaxSide(rgb, IMAGE_PREVIEW_MAX_PX);
+        BufferedImage thumb = scaleDownMaxSide(rgb, IMAGE_THUMB_MAX_PX);
+
+        String previewKey = LocalStorageKeyGenerator.processedVariantKey(media.getId(), "preview.jpg");
+        String thumbKey = LocalStorageKeyGenerator.processedVariantKey(media.getId(), "thumb.jpg");
+
+        File previewFile = Files.createTempFile("preview_", ".jpg").toFile();
+        File thumbFile = Files.createTempFile("thumb_", ".jpg").toFile();
+        try {
+            writeJpeg(preview, previewFile, 0.88f);
+            writeJpeg(thumb, thumbFile, 0.82f);
+            localStorageService.save(previewKey, Files.readAllBytes(previewFile.toPath()), "image/jpeg");
+            localStorageService.save(thumbKey, Files.readAllBytes(thumbFile.toPath()), "image/jpeg");
+        } finally {
+            cleanupTempFile(previewFile);
+            cleanupTempFile(thumbFile);
+        }
+
+        List<MediaVariant> next = new ArrayList<>();
+        for (MediaVariant v : media.getVariants()) {
+            if (v == null || v.getName() == null) {
+                continue;
+            }
+            String n = v.getName();
+            if (!"preview".equals(n) && !"thumb".equals(n)) {
+                next.add(v);
+            }
+        }
+        next.add(new MediaVariant("preview", previewKey, "image/jpeg", preview.getWidth(), preview.getHeight()));
+        next.add(new MediaVariant("thumb", thumbKey, "image/jpeg", thumb.getWidth(), thumb.getHeight()));
+        media.setVariants(next);
+        media.getMeta().put("delivery", Map.of("preview_key", previewKey, "thumb_key", thumbKey));
+        mediaFileRepository.save(media);
+    }
+
+    private void transcodeVideoToPlayback(MediaFile media) throws IOException, InterruptedException {
+        File src = localStorageService.getFile(media.getStorageKey());
+        if (src == null || !src.exists()) {
+            throw new IOException("Video missing: " + media.getStorageKey());
+        }
+        Path tempDir = Paths.get(TEMP_DIR, "playback");
+        Files.createDirectories(tempDir);
+        File out = tempDir.resolve("playback_" + media.getId() + ".mp4").toFile();
+        int exit = runFfmpegPlayback(src, out, true);
+        if (exit != 0) {
+            log.info("ffmpeg with audio failed (exit={}), retrying without audio mediaId={}", exit, media.getId());
+            exit = runFfmpegPlayback(src, out, false);
+        }
+        if (exit != 0 || !out.exists() || out.length() < 1024) {
+            throw new IOException("ffmpeg transcoding failed exit=" + exit);
+        }
+        String key = LocalStorageKeyGenerator.processedVariantKey(media.getId(), "playback.mp4");
+        localStorageService.save(key, Files.readAllBytes(out.toPath()), "video/mp4");
+        cleanupTempFile(out);
+
+        List<MediaVariant> next = new ArrayList<>();
+        for (MediaVariant v : media.getVariants()) {
+            if (v == null || v.getName() == null) {
+                continue;
+            }
+            if (!"playback".equals(v.getName())) {
+                next.add(v);
+            }
+        }
+        next.add(new MediaVariant("playback", key, "video/mp4"));
+        media.setVariants(next);
+        media.getMeta().put("playback_key", key);
+        mediaFileRepository.save(media);
+    }
+
+    private static int runFfmpegPlayback(File input, File output, boolean withAudio) throws IOException, InterruptedException {
+        List<String> cmd = new ArrayList<>();
+        cmd.add(FFMPEG_COMMAND);
+        cmd.add("-y");
+        cmd.add("-i");
+        cmd.add(input.getAbsolutePath());
+        cmd.add("-vf");
+        cmd.add("scale=1920:1920:force_original_aspect_ratio=decrease");
+        cmd.add("-c:v");
+        cmd.add("libx264");
+        cmd.add("-profile:v");
+        cmd.add("high");
+        cmd.add("-level");
+        cmd.add("4.1");
+        cmd.add("-pix_fmt");
+        cmd.add("yuv420p");
+        cmd.add("-preset");
+        cmd.add("medium");
+        cmd.add("-crf");
+        cmd.add("21");
+        cmd.add("-movflags");
+        cmd.add("+faststart");
+        if (withAudio) {
+            cmd.add("-c:a");
+            cmd.add("aac");
+            cmd.add("-b:a");
+            cmd.add("128k");
+            cmd.add("-ar");
+            cmd.add("48000");
+        } else {
+            cmd.add("-an");
+        }
+        cmd.add(output.getAbsolutePath());
+        ProcessBuilder pb = new ProcessBuilder(cmd);
+        pb.redirectErrorStream(true);
+        return pb.start().waitFor();
+    }
+
+    private static BufferedImage toRgb(BufferedImage src) {
+        if (src.getType() == BufferedImage.TYPE_INT_RGB) {
+            return src;
+        }
+        BufferedImage rgb = new BufferedImage(src.getWidth(), src.getHeight(), BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = rgb.createGraphics();
+        g.setColor(Color.WHITE);
+        g.fillRect(0, 0, rgb.getWidth(), rgb.getHeight());
+        g.drawImage(src, 0, 0, null);
+        g.dispose();
+        return rgb;
+    }
+
+    private static BufferedImage scaleDownMaxSide(BufferedImage src, int maxSide) {
+        int w = src.getWidth();
+        int h = src.getHeight();
+        int max = Math.max(w, h);
+        if (max <= maxSide) {
+            return src;
+        }
+        double sc = maxSide / (double) max;
+        int nw = Math.max(1, (int) Math.round(w * sc));
+        int nh = Math.max(1, (int) Math.round(h * sc));
+        BufferedImage dst = new BufferedImage(nw, nh, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = dst.createGraphics();
+        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BICUBIC);
+        g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+        g.drawImage(src, 0, 0, nw, nh, null);
+        g.dispose();
+        return dst;
+    }
+
+    private static void writeJpeg(BufferedImage img, File file, float quality) throws IOException {
+        Iterator<ImageWriter> writers = ImageIO.getImageWritersByFormatName("jpg");
+        if (!writers.hasNext()) {
+            throw new IOException("No JPEG writer");
+        }
+        ImageWriter writer = writers.next();
+        ImageWriteParam param = writer.getDefaultWriteParam();
+        if (param.canWriteCompressed()) {
+            param.setCompressionMode(ImageWriteParam.MODE_EXPLICIT);
+            param.setCompressionQuality(quality);
+        }
+        try (FileOutputStream fos = new FileOutputStream(file);
+             ImageOutputStream ios = ImageIO.createImageOutputStream(fos)) {
+            writer.setOutput(ios);
+            writer.write(null, new IIOImage(img, null, null), param);
+        } finally {
+            writer.dispose();
         }
     }
 

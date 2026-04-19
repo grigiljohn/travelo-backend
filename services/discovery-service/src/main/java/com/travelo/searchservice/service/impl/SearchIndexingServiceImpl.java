@@ -5,6 +5,7 @@ import com.travelo.searchservice.repository.*;
 import com.travelo.searchservice.service.SearchIndexingService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -20,12 +21,12 @@ public class SearchIndexingServiceImpl implements SearchIndexingService {
     private final ProductDocumentRepository productRepository;
 
     public SearchIndexingServiceImpl(
-            PostDocumentRepository postRepository,
-            UserDocumentRepository userRepository,
-            HashtagDocumentRepository hashtagRepository,
-            LocationDocumentRepository locationRepository,
-            ShopDocumentRepository shopRepository,
-            ProductDocumentRepository productRepository) {
+            @Lazy PostDocumentRepository postRepository,
+            @Lazy UserDocumentRepository userRepository,
+            @Lazy HashtagDocumentRepository hashtagRepository,
+            @Lazy LocationDocumentRepository locationRepository,
+            @Lazy ShopDocumentRepository shopRepository,
+            @Lazy ProductDocumentRepository productRepository) {
         this.postRepository = postRepository;
         this.userRepository = userRepository;
         this.hashtagRepository = hashtagRepository;

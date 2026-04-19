@@ -1,5 +1,6 @@
 package com.travelo.socialservice;
 
+import com.travelo.momentsservice.config.MomentsAiOpenAiProperties;
 import com.travelo.momentsservice.config.MomentsStorageProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -33,7 +34,7 @@ import org.springframework.transaction.annotation.EnableTransactionManagement;
 @EnableDiscoveryClient
 @EnableTransactionManagement
 @EnableScheduling
-@EnableConfigurationProperties(MomentsStorageProperties.class)
+@EnableConfigurationProperties({MomentsStorageProperties.class, MomentsAiOpenAiProperties.class})
 public class SocialServiceApplication {
 
     public static void main(String[] args) {

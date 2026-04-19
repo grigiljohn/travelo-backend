@@ -1,7 +1,12 @@
 package com.travelo.momentsservice.service.impl;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.travelo.momentsservice.ai.MomentAiLlmCaptionPack;
+import com.travelo.momentsservice.ai.MomentAiLlmRequest;
+import com.travelo.momentsservice.ai.MomentAiTimelinePlanner;
+import com.travelo.momentsservice.ai.OpenAiMomentAiEnrichmentService;
 import com.travelo.momentsservice.config.MomentsStorageProperties;
 import com.travelo.momentsservice.dto.MomentAiSuggestionResponse;
 import com.travelo.momentsservice.dto.MomentCommentResponse;
@@ -11,6 +16,7 @@ import com.travelo.momentsservice.dto.MomentFeedItemResponse;
 import com.travelo.momentsservice.dto.MomentLikeResponse;
 import com.travelo.momentsservice.engagement.MomentEngagementStore;
 import com.travelo.momentsservice.model.MomentRecord;
+import com.travelo.momentsservice.model.MomentIdempotencyRecord;
 import com.travelo.momentsservice.service.MomentsService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,10 +35,17 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.OffsetDateTime;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Stream;
 
@@ -41,28 +54,43 @@ public class MomentsServiceImpl implements MomentsService {
 
     private static final Logger log = LoggerFactory.getLogger(MomentsServiceImpl.class);
 
+    private static final Set<String> MOMENT_AI_VIDEO_FILTERS = Set.of(
+            "Original", "Warm", "Cinematic", "Vibrant", "B&W", "Cool"
+    );
+
     private final MomentsStorageProperties storageProperties;
     private final ObjectMapper objectMapper;
     private final MomentEngagementStore engagementStore;
+    private final OpenAiMomentAiEnrichmentService openAiMomentAiEnrichment;
     private final CopyOnWriteArrayList<MomentRecord> records = new CopyOnWriteArrayList<>();
+    private final Map<String, MomentIdempotencyRecord> idempotencyRecords = new ConcurrentHashMap<>();
     private final Path recordsFilePath;
+    private final Path idempotencyFilePath;
+    private final Duration idempotencyTtl;
 
     public MomentsServiceImpl(
             MomentsStorageProperties storageProperties,
             ObjectMapper objectMapper,
-            MomentEngagementStore engagementStore
+            MomentEngagementStore engagementStore,
+            OpenAiMomentAiEnrichmentService openAiMomentAiEnrichment,
+            @org.springframework.beans.factory.annotation.Value("${moments.idempotency.ttl-hours:24}") long idempotencyTtlHours
     ) {
         this.storageProperties = storageProperties;
         this.objectMapper = objectMapper;
         this.engagementStore = engagementStore;
+        this.openAiMomentAiEnrichment = openAiMomentAiEnrichment;
         this.recordsFilePath = Path.of(storageProperties.localDir(), "moments-records.json");
+        this.idempotencyFilePath = Path.of(storageProperties.localDir(), "moments-idempotency.json");
+        this.idempotencyTtl = Duration.ofHours(Math.max(1, idempotencyTtlHours));
         loadRecordsFromDisk();
+        loadIdempotencyFromDisk();
     }
 
     @Override
     public MomentCreateResponse createMoment(
             String userId,
             String userName,
+            String idempotencyKey,
             String type,
             String mediaType,
             String caption,
@@ -86,6 +114,18 @@ public class MomentsServiceImpl implements MomentsService {
             String audience,
             List<MultipartFile> files
     ) throws IOException {
+        final String normalizedUserId = (userId == null || userId.isBlank()) ? "current-user" : userId;
+        final String normalizedUserName = (userName == null || userName.isBlank()) ? "You" : userName;
+        final String normalizedIdempotencyKey = normalizeIdempotencyKey(idempotencyKey);
+        if (normalizedIdempotencyKey != null) {
+            final MomentCreateResponse replay = replayIdempotentResponse(normalizedIdempotencyKey, normalizedUserId);
+            if (replay != null) {
+                log.info("flow=moment_create idempotency_replay key={} userId={} momentId={}",
+                        normalizedIdempotencyKey, normalizedUserId, replay.id());
+                return replay;
+            }
+        }
+
         final String momentId = "moment_" + System.currentTimeMillis();
         log.info(
                 "flow=moment_create service begin momentId={} type={} mediaType={} rawUrlCount={} multipartCount={}",
@@ -135,8 +175,8 @@ public class MomentsServiceImpl implements MomentsService {
         records.add(
                 new MomentRecord(
                         momentId,
-                        (userId == null || userId.isBlank()) ? "current-user" : userId,
-                        (userName == null || userName.isBlank()) ? "You" : userName,
+                        normalizedUserId,
+                        normalizedUserName,
                         type,
                         mediaType,
                         caption,
@@ -166,11 +206,11 @@ public class MomentsServiceImpl implements MomentsService {
         log.info("flow=moment_create service done momentId={} storedCount={} localDir={}",
                 momentId, storedFiles.size(), baseDir);
 
-        return new MomentCreateResponse(
+        final MomentCreateResponse response = new MomentCreateResponse(
                 momentId,
                 true,
-                (userId == null || userId.isBlank()) ? "current-user" : userId,
-                (userName == null || userName.isBlank()) ? "You" : userName,
+                normalizedUserId,
+                normalizedUserName,
                 type,
                 mediaType,
                 caption,
@@ -194,6 +234,10 @@ public class MomentsServiceImpl implements MomentsService {
                 storedFiles,
                 createdAt
         );
+        if (normalizedIdempotencyKey != null) {
+            storeIdempotentResponse(normalizedIdempotencyKey, normalizedUserId, response);
+        }
+        return response;
     }
 
     @Override
@@ -383,36 +427,167 @@ public class MomentsServiceImpl implements MomentsService {
             String action,
             String caption,
             String location,
-            String tags
+            String tags,
+            Double durationSec
     ) {
-        final String safeLocation = (location == null || location.isBlank()) ? "Fort Kochi" : location;
-        final String normalized = action == null ? "caption" : action.trim().toLowerCase();
-        final List<Double> scenes = List.of(6d, 13d, 21d, 29d, 37d, 46d, 54d);
-        final String highlightsJson = "[{\"start\":8,\"end\":14,\"highlight\":true},{\"start\":24,\"end\":31,\"highlight\":true},{\"start\":42,\"end\":49,\"highlight\":true}]";
-        final String segmentsJson = "[{\"start\":8,\"end\":14,\"highlight\":true},{\"start\":24,\"end\":31,\"highlight\":true}]";
+        final String normalized = action == null ? "caption" : action.trim().toLowerCase(Locale.ROOT);
+        final String safeLocation = (location == null || location.isBlank()) ? "Fort Kochi" : location.strip();
+        final double dur = MomentAiTimelinePlanner.clampDurationSeconds(durationSec);
+        final List<String> parsedTags = parseCommaTags(tags);
 
-        String generatedCaption = caption == null ? "" : caption;
-        String generatedFilter = "Cinematic";
-        List<String> generatedTags = List.of("sunset", "travel", "hidden-gem");
-        if ("caption".equals(normalized) || generatedCaption.isBlank()) {
-            generatedCaption = "Golden sunset vibes at " + safeLocation + " 🌅";
-        }
+        final List<Map<String, Object>> highlightRows = MomentAiTimelinePlanner.buildHighlights(dur);
+        final List<Double> sceneTimes = MomentAiTimelinePlanner.buildSceneTimes(dur);
+
+        final List<Map<String, Object>> segmentRows;
         if ("music-sync".equals(normalized)) {
-            generatedFilter = "Vibrant";
-            generatedTags = List.of("beat-sync", "travel-edit", "cinematic");
-        } else if ("scenes".equals(normalized)) {
-            generatedFilter = "Original";
+            List<Map<String, Object>> src = MomentAiTimelinePlanner.firstSegments(highlightRows, 4);
+            if (src.isEmpty()) {
+                src = highlightRows;
+            }
+            segmentRows = MomentAiTimelinePlanner.quantizeSegments(src, dur);
+        } else {
+            segmentRows = MomentAiTimelinePlanner.firstSegments(highlightRows, 2);
         }
 
-        return new MomentAiSuggestionResponse(
+        final String highlightsJson;
+        final String segmentsJson;
+        try {
+            highlightsJson = objectMapper.writeValueAsString(highlightRows);
+            segmentsJson = objectMapper.writeValueAsString(segmentRows);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("moment ai timeline json", e);
+        }
+
+        final String generatedCaption = buildMomentAiCaption(normalized, caption, safeLocation, parsedTags, dur);
+        final String generatedFilter = resolveMomentAiVideoFilter(normalized);
+        final List<String> generatedTags = mergeMomentAiTags(parsedTags, momentAiTagBoosters(normalized));
+
+        final MomentAiSuggestionResponse heuristic = new MomentAiSuggestionResponse(
                 normalized,
                 generatedCaption,
                 generatedTags,
                 generatedFilter,
-                scenes,
+                sceneTimes,
                 segmentsJson,
                 highlightsJson
         );
+
+        Optional<MomentAiLlmCaptionPack> llm = openAiMomentAiEnrichment.maybeEnrich(
+                new MomentAiLlmRequest(normalized, caption, safeLocation, parsedTags, dur)
+        );
+        return llm.map(p -> new MomentAiSuggestionResponse(
+                normalized,
+                p.caption(),
+                mergeMomentAiTagsWithLlm(parsedTags, momentAiTagBoosters(normalized), p.tags()),
+                sanitizeMomentAiVideoFilter(p.videoFilter(), generatedFilter),
+                sceneTimes,
+                segmentsJson,
+                highlightsJson
+        )).orElse(heuristic);
+    }
+
+    private static String sanitizeMomentAiVideoFilter(String fromLlm, String heuristic) {
+        if (!StringUtils.hasText(fromLlm)) {
+            return heuristic;
+        }
+        String t = fromLlm.trim();
+        return MOMENT_AI_VIDEO_FILTERS.contains(t) ? t : heuristic;
+    }
+
+    private static List<String> mergeMomentAiTagsWithLlm(List<String> parsed, String[] boosters, List<String> llmTags) {
+        LinkedHashSet<String> set = new LinkedHashSet<>(mergeMomentAiTags(parsed, boosters));
+        if (llmTags != null) {
+            for (String raw : llmTags) {
+                if (!StringUtils.hasText(raw) || set.size() >= 20) {
+                    continue;
+                }
+                set.add(raw.trim().toLowerCase(Locale.ROOT));
+            }
+        }
+        return new ArrayList<>(set);
+    }
+
+    private static List<String> parseCommaTags(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            return new ArrayList<>();
+        }
+        List<String> out = new ArrayList<>();
+        for (String part : raw.split(",")) {
+            String t = part.trim();
+            if (StringUtils.hasText(t) && out.size() < 16) {
+                out.add(t);
+            }
+        }
+        return out;
+    }
+
+    private static List<String> mergeMomentAiTags(List<String> base, String[] extras) {
+        LinkedHashSet<String> set = new LinkedHashSet<>(base);
+        for (String e : extras) {
+            if (StringUtils.hasText(e)) {
+                set.add(e.trim());
+            }
+        }
+        return new ArrayList<>(set);
+    }
+
+    private static String[] momentAiTagBoosters(String normalized) {
+        return switch (normalized) {
+            case "music-sync" -> new String[]{"beat-sync", "travel-edit", "cinematic"};
+            case "highlights" -> new String[]{"best-moments", "travel"};
+            case "scenes" -> new String[]{"scene-cuts"};
+            case "smart-trim" -> new String[]{"smart-cut"};
+            case "studio_suggest" -> new String[]{"studio-grade", "travel"};
+            default -> new String[]{"travel", "moments"};
+        };
+    }
+
+    private static String resolveMomentAiVideoFilter(String normalized) {
+        return switch (normalized) {
+            case "scenes" -> "Original";
+            case "music-sync" -> "Vibrant";
+            case "smart-trim", "studio_suggest" -> "Warm";
+            case "highlights" -> "Cinematic";
+            default -> "Cinematic";
+        };
+    }
+
+    private static String shortenPlace(String location, int max) {
+        if (!StringUtils.hasText(location)) {
+            return "this spot";
+        }
+        String t = location.strip();
+        return t.length() <= max ? t : t.substring(0, max - 1) + "…";
+    }
+
+    private static String buildMomentAiCaption(
+            String normalized,
+            String userCaption,
+            String location,
+            List<String> tagList,
+            double durSeconds
+    ) {
+        final String place = shortenPlace(location, 48);
+        final boolean hasUser = StringUtils.hasText(userCaption);
+        final String topic = !tagList.isEmpty() ? tagList.get(0) : "travel";
+
+        return switch (normalized) {
+            case "caption" -> hasUser
+                    ? "Try leading with emotion, then anchor at " + place + " — detail beats generic praise."
+                    : "Golden light around " + place + " — worth slowing down for 🌅";
+            case "highlights" -> "Three strong beats: arrival, reaction, and a wide shot near " + place + ".";
+            case "scenes" -> "Scene markers follow natural pauses across your ~" + Math.round(durSeconds) + "s clip at "
+                    + place + ".";
+            case "smart-trim" -> "Hook in the first highlight; land the payoff before the last "
+                    + Math.max(2, Math.round(durSeconds * 0.12)) + "s at " + place + ".";
+            case "music-sync" -> "Snap cuts on the 0.25s grid; ride the beat through " + place + ".";
+            case "studio_suggest" -> hasUser
+                    ? "Studio polish: keep " + topic + " energy — balance skies and skin tones at " + place + "."
+                    : "Warm grade + honest line about " + place + " — one hook, one specific detail.";
+            default -> hasUser
+                    ? "Refine pacing at " + place + " — " + userCaption.substring(0, Math.min(72, userCaption.length()))
+                    : "Moments that breathe — start at " + place + ".";
+        };
     }
 
     /** Text-only posts (e.g. Flutter entry mode {@code writeTip}) — caption must be non-blank. */
@@ -465,6 +640,95 @@ public class MomentsServiceImpl implements MomentsService {
                     .writeValue(recordsFilePath.toFile(), records);
         } catch (Exception e) {
             log.warn("flow=moment_persist failed file={} err={}", recordsFilePath, e.toString());
+        }
+    }
+
+    private String normalizeIdempotencyKey(String key) {
+        if (key == null) {
+            return null;
+        }
+        final String k = key.trim();
+        if (k.isBlank() || k.length() > 200) {
+            return null;
+        }
+        return k;
+    }
+
+    private String idempotencyCompositeKey(String key, String userId) {
+        return userId + "::" + key;
+    }
+
+    private MomentCreateResponse replayIdempotentResponse(String key, String userId) {
+        pruneExpiredIdempotencyKeys();
+        final MomentIdempotencyRecord record = idempotencyRecords.get(idempotencyCompositeKey(key, userId));
+        if (record == null) {
+            return null;
+        }
+        return record.response();
+    }
+
+    private void storeIdempotentResponse(String key, String userId, MomentCreateResponse response) {
+        pruneExpiredIdempotencyKeys();
+        final MomentIdempotencyRecord record = new MomentIdempotencyRecord(
+                key,
+                userId,
+                response,
+                OffsetDateTime.now()
+        );
+        idempotencyRecords.put(idempotencyCompositeKey(key, userId), record);
+        persistIdempotencyToDisk();
+    }
+
+    private void pruneExpiredIdempotencyKeys() {
+        final OffsetDateTime cutoff = OffsetDateTime.now().minus(idempotencyTtl);
+        boolean changed = false;
+        final var it = idempotencyRecords.entrySet().iterator();
+        while (it.hasNext()) {
+            final var e = it.next();
+            final MomentIdempotencyRecord r = e.getValue();
+            if (r == null || r.createdAt() == null || r.createdAt().isBefore(cutoff)) {
+                it.remove();
+                changed = true;
+            }
+        }
+        if (changed) {
+            persistIdempotencyToDisk();
+        }
+    }
+
+    private void loadIdempotencyFromDisk() {
+        try {
+            Files.createDirectories(idempotencyFilePath.getParent());
+            if (!Files.exists(idempotencyFilePath)) {
+                return;
+            }
+            final List<MomentIdempotencyRecord> restored = objectMapper.readValue(
+                    idempotencyFilePath.toFile(),
+                    new TypeReference<>() {
+                    }
+            );
+            idempotencyRecords.clear();
+            for (MomentIdempotencyRecord r : restored) {
+                if (r == null || r.key() == null || r.userId() == null) {
+                    continue;
+                }
+                idempotencyRecords.put(idempotencyCompositeKey(r.key(), r.userId()), r);
+            }
+            pruneExpiredIdempotencyKeys();
+            log.info("flow=moment_idempotency_restore restoredCount={} file={}",
+                    idempotencyRecords.size(), idempotencyFilePath);
+        } catch (Exception e) {
+            log.warn("flow=moment_idempotency_restore failed file={} err={}", idempotencyFilePath, e.toString());
+        }
+    }
+
+    private void persistIdempotencyToDisk() {
+        try {
+            Files.createDirectories(idempotencyFilePath.getParent());
+            objectMapper.writerWithDefaultPrettyPrinter()
+                    .writeValue(idempotencyFilePath.toFile(), List.copyOf(idempotencyRecords.values()));
+        } catch (Exception e) {
+            log.warn("flow=moment_idempotency_persist failed file={} err={}", idempotencyFilePath, e.toString());
         }
     }
 }

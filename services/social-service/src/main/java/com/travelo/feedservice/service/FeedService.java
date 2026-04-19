@@ -1,6 +1,7 @@
 package com.travelo.feedservice.service;
 
 import com.travelo.feedservice.dto.FeedResponse;
+import com.travelo.feedservice.dto.FeedRankingDebugResponse;
 
 import java.util.UUID;
 
@@ -20,6 +21,8 @@ public interface FeedService {
      * @return Feed response with items and next cursor (excluding seen posts)
      */
     FeedResponse getFeed(UUID userId, String cursor, int limit, String mood, String surface);
+
+    FeedRankingDebugResponse debugRanking(UUID userId, int limit, String mood, String surface);
     
     /**
      * Refresh/regenerate feed for a user.

@@ -25,5 +25,8 @@ public interface AdGroupRepository extends JpaRepository<AdGroup, UUID> {
     
     @Query("SELECT ag FROM AdGroup ag WHERE ag.campaign.id = :campaignId AND ag.status = :status AND ag.deletedAt IS NULL")
     List<AdGroup> findAllByCampaignIdAndStatus(UUID campaignId, AdGroupStatus status);
+
+    @Query("SELECT ag FROM AdGroup ag WHERE ag.deletedAt IS NULL")
+    Page<AdGroup> findAllActive(Pageable pageable);
 }
 
