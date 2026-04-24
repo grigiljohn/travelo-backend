@@ -1,5 +1,25 @@
 # Production configuration for media-service
 
+spring:
+  # Redis connection for shared reel progress tracker (enabled via reel.progress.backend=redis).
+  data:
+    redis:
+      host: ${REDIS_HOST:redis}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      timeout: ${REDIS_TIMEOUT:2s}
+      lettuce:
+        pool:
+          enabled: true
+          max-active: 16
+          max-idle: 8
+          min-idle: 1
+
+reel:
+  progress:
+    # Flip to "memory" if Redis is unavailable; tracker API is identical.
+    backend: ${REEL_PROGRESS_BACKEND:redis}
+
 management:
   endpoints:
     web:

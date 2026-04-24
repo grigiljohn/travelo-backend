@@ -1,0 +1,20 @@
+service:
+  name: identity-service
+  port: 8081
+
+extraEnv:
+  - name: EUREKA_CLIENT_ENABLED
+    value: "false"
+  - name: SPRING_CONFIG_IMPORT
+    value: ""
+
+envFrom:
+  - secretRef:
+      name: travelo-identity-service-secrets
+  # Expect this to ship: POSTGRES_URL, POSTGRES_USERNAME, POSTGRES_PASSWORD,
+  # REDIS_HOST, REDIS_PORT, REDIS_PASSWORD, JWT_SECRET, MAIL_USERNAME, MAIL_PASSWORD,
+  # DEFAULT_OTP, GOOGLE_OAUTH_CLIENT_IDS
+
+resources:
+  limits:   { cpu: 1000m, memory: 1Gi }
+  requests: { cpu: 300m,  memory: 640Mi }

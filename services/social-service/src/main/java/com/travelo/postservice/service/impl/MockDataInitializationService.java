@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -15,10 +16,21 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Service to initialize mock data when database is empty.
- * This provides fallback data for development and testing.
+ * Seeds mock comments into an empty comment table so local/dev instances show
+ * realistic content without requiring a full database import. Disabled by
+ * default — flip {@code app.dev.mock-data.enabled=true} in an environment
+ * where you explicitly want seeded mocks (never in production).
+ *
+ * <p>Historically this ran unconditionally on every boot which made staging
+ * ambiguous and blurred the "clean DB" signal. E22 retired that behavior;
+ * the property-gated form is the permanent shape.</p>
  */
 @Component
+@ConditionalOnProperty(
+        prefix = "app.dev.mock-data",
+        name = "enabled",
+        havingValue = "true",
+        matchIfMissing = false)
 public class MockDataInitializationService implements CommandLineRunner {
 
     private static final Logger logger = LoggerFactory.getLogger(MockDataInitializationService.class);

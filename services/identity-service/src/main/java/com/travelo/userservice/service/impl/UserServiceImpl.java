@@ -4,6 +4,8 @@ import com.travelo.userservice.dto.*;
 import com.travelo.authservice.entity.User;
 import com.travelo.userservice.entity.Follow;
 import com.travelo.userservice.dto.SuggestedUserDto;
+import com.travelo.userservice.dto.events.UserFollowedEvent;
+import com.travelo.userservice.event.UserEventPublisher;
 import com.travelo.authservice.repository.UserRepository;
 import com.travelo.userservice.repository.FollowRepository;
 import com.travelo.userservice.service.UserService;
@@ -20,9 +22,14 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -32,11 +39,15 @@ public class UserServiceImpl implements UserService {
 
     private final UserRepository userRepository;
     private final FollowRepository followRepository;
+    private final UserEventPublisher userEventPublisher;
 
-    public UserServiceImpl(UserRepository userRepository, FollowRepository followRepository) {
+    public UserServiceImpl(UserRepository userRepository,
+                           FollowRepository followRepository,
+                           UserEventPublisher userEventPublisher) {
         this.userRepository = userRepository;
         this.followRepository = followRepository;
-        logger.info("UserServiceImpl initialized with UserRepository and FollowRepository");
+        this.userEventPublisher = userEventPublisher;
+        logger.info("UserServiceImpl initialized with UserRepository, FollowRepository, UserEventPublisher");
     }
 
     @Override
@@ -309,7 +320,9 @@ public class UserServiceImpl implements UserService {
         Follow follow = new Follow(followerId, followeeId);
         followRepository.save(follow);
         logger.info("Successfully created follow relationship: {} -> {}", followerId, followeeId);
-        
+
+        publishFollowEvent(followerId, followeeId, true);
+
         // Return updated state
         long followersCount = followRepository.countByFolloweeId(followeeId);
         return new FollowResponseDto("User followed successfully", true, followersCount);
@@ -340,10 +353,28 @@ public class UserServiceImpl implements UserService {
         // Delete follow relationship
         followRepository.deleteByFollowerIdAndFolloweeId(followerId, followeeId);
         logger.info("Successfully removed follow relationship: {} -> {}", followerId, followeeId);
-        
+
+        publishFollowEvent(followerId, followeeId, false);
+
         // Return updated state
         long followersCount = followRepository.countByFolloweeId(followeeId);
         return new FollowResponseDto("User unfollowed successfully", false, followersCount);
+    }
+
+    /**
+     * Publish follow/unfollow event. Wrapped in try/catch so downstream failures
+     * (e.g. broker unavailable) never roll back the user-visible follow action.
+     */
+    private void publishFollowEvent(UUID followerId, UUID followeeId, boolean followed) {
+        try {
+            UserFollowedEvent event = followed
+                    ? UserFollowedEvent.followed(followerId.toString(), followeeId.toString())
+                    : UserFollowedEvent.unfollowed(followerId.toString(), followeeId.toString());
+            userEventPublisher.publishUserFollowed(event);
+        } catch (Exception ex) {
+            logger.warn("flow=user_follow_event_publish_failed followerId={} followeeId={} followed={} err={}",
+                    followerId, followeeId, followed, ex.toString());
+        }
     }
 
     @Override
@@ -416,42 +447,105 @@ public class UserServiceImpl implements UserService {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public List<SuggestedUserDto> getSuggestedUsers(UUID userId, int limit) {
-        logger.info("Getting suggested users for user: {}, limit: {}", userId, limit);
-        
-        // Get users that the current user is not following
-        List<User> allUsers = userRepository.findAll();
-        List<Follow> followingRelations = followRepository.findByFollowerId(userId);
-        List<UUID> followingIds = followingRelations.stream()
-                .map(Follow::getFolloweeId)
-                .collect(java.util.stream.Collectors.toList());
-        
-        // Filter out users that are already being followed, blocked, or the user themselves
-        List<User> suggestedUsers = allUsers.stream()
-                .filter(user -> !user.getId().equals(userId))
-                .filter(user -> !followingIds.contains(user.getId()))
-                .limit(limit)
-                .collect(java.util.stream.Collectors.toList());
-        
-        // Convert to SuggestedUserDto
-        List<SuggestedUserDto> suggestions = new ArrayList<>();
-        String[] roles = {"旅游内容热门作者", "美食内容热门作者", "美妆内容热门作者", "歌手", "摄影师", "旅行家"};
-        int roleIndex = 0;
-        
-        for (User user : suggestedUsers) {
-            SuggestedUserDto dto = new SuggestedUserDto();
-            dto.setId(user.getId());
-            dto.setUsername(user.getUsername() != null ? user.getUsername() : "user_" + user.getId().toString().substring(0, 8));
-            dto.setName(user.getName() != null ? user.getName() : "Unknown User");
-            dto.setProfilePictureUrl(user.getProfilePictureUrl());
-            dto.setRole(roles[roleIndex % roles.length]);
-            dto.setIsFollowing(false);
-            suggestions.add(dto);
-            roleIndex++;
+        int capped = Math.max(1, Math.min(limit, 50));
+        logger.info("Getting suggested users for user: {}, limit: {}", userId, capped);
+
+        // 1. Direct neighborhood: who the viewer already follows.
+        Set<UUID> directlyFollowed = new HashSet<>();
+        for (Follow f : followRepository.findByFollowerId(userId)) {
+            directlyFollowed.add(f.getFolloweeId());
         }
-        
-        logger.info("Found {} suggested users for user {}", suggestions.size(), userId);
+
+        // 2. Friends-of-friends: for each user the viewer follows, look at the
+        //    people *they* follow. Count how many mutual paths each candidate
+        //    has — that's the primary ranking signal (classic follow-graph
+        //    recommendation: "N people you follow also follow X").
+        Map<UUID, Integer> mutualFollowScore = new HashMap<>();
+        for (UUID friendId : directlyFollowed) {
+            List<Follow> friendsFollowees = followRepository.findByFollowerId(friendId);
+            for (Follow f : friendsFollowees) {
+                UUID candidate = f.getFolloweeId();
+                if (candidate.equals(userId)) continue;
+                if (directlyFollowed.contains(candidate)) continue;
+                mutualFollowScore.merge(candidate, 1, Integer::sum);
+            }
+        }
+
+        // 3. Rank by score desc, then by follower count desc (popularity tie
+        //    breaker). We resolve user rows lazily to avoid pulling the whole
+        //    table into memory.
+        List<Map.Entry<UUID, Integer>> ranked = new ArrayList<>(mutualFollowScore.entrySet());
+        ranked.sort(Comparator
+                .comparingInt((Map.Entry<UUID, Integer> e) -> e.getValue()).reversed()
+                .thenComparing(e -> e.getKey().toString()));
+
+        LinkedHashMap<UUID, SuggestedUserDto> out = new LinkedHashMap<>();
+        for (Map.Entry<UUID, Integer> entry : ranked) {
+            if (out.size() >= capped) break;
+            Optional<User> candidate = userRepository.findById(entry.getKey());
+            candidate.ifPresent(u -> {
+                SuggestedUserDto dto = buildSuggestionDto(u, entry.getValue(), followRepository.countByFolloweeId(u.getId()));
+                out.put(u.getId(), dto);
+            });
+        }
+
+        // 4. Fallback: if the friend-graph is too sparse to fill the slate
+        //    (e.g. the viewer follows nobody yet), pad with the most popular
+        //    users they don't already follow. This keeps the "You may be
+        //    interested in" strip meaningful for brand-new accounts.
+        if (out.size() < capped) {
+            // Copy into a mutable list so we can sort without mutating any
+            // caller-visible collection (Spring Data returns a mutable list
+            // today, but unit tests and future repo implementations may pass
+            // immutable ones).
+            List<User> popular = new ArrayList<>(userRepository.findAll());
+            popular.sort(Comparator
+                    .comparingLong((User u) -> followRepository.countByFolloweeId(u.getId()))
+                    .reversed());
+            for (User u : popular) {
+                if (out.size() >= capped) break;
+                if (u.getId().equals(userId)) continue;
+                if (directlyFollowed.contains(u.getId())) continue;
+                if (out.containsKey(u.getId())) continue;
+                out.put(u.getId(), buildSuggestionDto(u, 0, followRepository.countByFolloweeId(u.getId())));
+            }
+        }
+
+        List<SuggestedUserDto> suggestions = new ArrayList<>(out.values());
+        logger.info("Suggested users for {} -> returned={} (fromGraph={}, filler={})",
+                userId, suggestions.size(),
+                Math.min(ranked.size(), capped),
+                Math.max(0, suggestions.size() - Math.min(ranked.size(), capped)));
         return suggestions;
+    }
+
+    /**
+     * Build the wire DTO for a suggestion entry. The {@code role} field is
+     * synthesized from the follow-graph signal so the UI has something
+     * honest to show ("Followed by N people you follow" or "Popular
+     * traveler") instead of a hardcoded label.
+     */
+    private SuggestedUserDto buildSuggestionDto(User user, int mutualFollows, long followerCount) {
+        SuggestedUserDto dto = new SuggestedUserDto();
+        dto.setId(user.getId());
+        dto.setUsername(user.getUsername() != null
+                ? user.getUsername()
+                : "user_" + user.getId().toString().substring(0, 8));
+        dto.setName(user.getName() != null ? user.getName() : "Unknown User");
+        dto.setProfilePictureUrl(user.getProfilePictureUrl());
+        dto.setRole(describeSuggestion(mutualFollows, followerCount));
+        dto.setIsFollowing(false);
+        return dto;
+    }
+
+    private String describeSuggestion(int mutualFollows, long followerCount) {
+        if (mutualFollows == 1) return "Followed by 1 person you follow";
+        if (mutualFollows > 1) return "Followed by " + mutualFollows + " people you follow";
+        if (followerCount >= 1000) return "Popular traveler";
+        if (followerCount > 0) return "Traveler you might like";
+        return "New on Travelo";
     }
 
     @Override

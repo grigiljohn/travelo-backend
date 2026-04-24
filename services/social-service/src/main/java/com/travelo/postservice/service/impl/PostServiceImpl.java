@@ -2,10 +2,14 @@ package com.travelo.postservice.service.impl;
 
 import com.travelo.postservice.client.MediaServiceClient;
 import com.travelo.postservice.dto.*;
+import com.travelo.postservice.dto.events.PostCreatedEvent;
+import com.travelo.postservice.dto.events.PostLikedEvent;
+import com.travelo.postservice.dto.events.TagCreatedEvent;
 import com.travelo.postservice.entity.*;
 import com.travelo.postservice.entity.enums.MediaType;
 import com.travelo.postservice.entity.enums.MoodType;
 import com.travelo.postservice.entity.enums.PostType;
+import com.travelo.postservice.event.PostEventPublisher;
 import com.travelo.postservice.exception.PostNotFoundException;
 import com.travelo.postservice.repository.*;
 import com.travelo.postservice.service.PostService;
@@ -20,8 +24,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -39,6 +45,7 @@ public class PostServiceImpl implements PostService {
     private final SavedPostRepository savedPostRepository;
     private final MediaServiceClient mediaServiceClient;
     private final com.travelo.postservice.client.UserServiceClient userServiceClient;
+    private final PostEventPublisher postEventPublisher;
     public PostServiceImpl(
             PostRepository postRepository,
             MediaItemRepository mediaItemRepository,
@@ -46,7 +53,8 @@ public class PostServiceImpl implements PostService {
             LikeRepository likeRepository,
             SavedPostRepository savedPostRepository,
             MediaServiceClient mediaServiceClient,
-            com.travelo.postservice.client.UserServiceClient userServiceClient) {
+            com.travelo.postservice.client.UserServiceClient userServiceClient,
+            PostEventPublisher postEventPublisher) {
         this.postRepository = postRepository;
         this.mediaItemRepository = mediaItemRepository;
         this.postTagRepository = postTagRepository;
@@ -54,6 +62,7 @@ public class PostServiceImpl implements PostService {
         this.savedPostRepository = savedPostRepository;
         this.mediaServiceClient = mediaServiceClient;
         this.userServiceClient = userServiceClient;
+        this.postEventPublisher = postEventPublisher;
         logger.info("PostServiceImpl initialized");
     }
 
@@ -153,6 +162,23 @@ public class PostServiceImpl implements PostService {
 
         logger.info("Post created successfully - ID: {}, postType: {}, mood: {}", 
                 post.getId(), postType, post.getMood());
+
+        // Emit post.created Kafka event (consumed by discovery-service for indexing and
+        // feed-service for follower fan-out). Fire-and-forget: never fails the request.
+        try {
+            postEventPublisher.publishPostCreated(new PostCreatedEvent(
+                    post.getId(),
+                    userId,
+                    post.getPostType() != null ? post.getPostType().name() : null,
+                    post.getPrivacyLevel() != null ? post.getPrivacyLevel().name() : null,
+                    post.getCaption(),
+                    request.tags() != null ? List.copyOf(request.tags()) : List.of(),
+                    post.getCreatedAt() != null ? post.getCreatedAt().toInstant() : java.time.Instant.now()
+            ));
+        } catch (Exception ex) {
+            logger.warn("Failed to emit post.created event for postId={}: {}", post.getId(), ex.toString());
+        }
+
         return dto;
     }
 
@@ -502,16 +528,40 @@ public class PostServiceImpl implements PostService {
     }
 
     private void savePostTags(Post post, List<String> tags) {
-        if (tags != null && !tags.isEmpty()) {
-            logger.debug("Saving {} tags for post ID: {}", tags.size(), post.getId());
-            for (String tag : tags) {
-                PostTag postTag = new PostTag(post, tag);
-                postTagRepository.save(postTag);
-            }
-            logger.debug("Successfully saved {} tags for post ID: {}", tags.size(), post.getId());
-        } else {
+        if (tags == null || tags.isEmpty()) {
             logger.debug("No tags to save for post ID: {}", post.getId());
+            return;
         }
+        logger.debug("Saving {} tags for post ID: {}", tags.size(), post.getId());
+        for (String tag : tags) {
+            if (tag == null || tag.isBlank()) continue;
+            String normalized = tag.trim();
+            // Detect first-ever use of this tag BEFORE we insert the new row, so we can
+            // emit `tag.created` once and keep downstream trend/search indexes in sync.
+            boolean isNewTag = false;
+            try {
+                isNewTag = postTagRepository.countByTag(normalized) == 0L;
+            } catch (Exception ex) {
+                logger.debug("tag novelty check failed for '{}': {}", normalized, ex.toString());
+            }
+
+            PostTag postTag = new PostTag(post, normalized);
+            postTagRepository.save(postTag);
+
+            if (isNewTag) {
+                try {
+                    postEventPublisher.publishTagCreated(new TagCreatedEvent(
+                            normalized,
+                            post.getId(),
+                            post.getUserId(),
+                            java.time.Instant.now()
+                    ));
+                } catch (Exception ex) {
+                    logger.warn("Failed to emit tag.created for tag='{}': {}", normalized, ex.toString());
+                }
+            }
+        }
+        logger.debug("Successfully saved {} tags for post ID: {}", tags.size(), post.getId());
     }
 
     @Override
@@ -735,16 +785,19 @@ public class PostServiceImpl implements PostService {
         boolean currentlyLiked = likeRepository.existsByUserIdAndPostId(userId, postId);
         logger.debug("Post ID: {} currently liked by user {}: {}", postId, userId, currentlyLiked);
 
+        boolean stateChanged = false;
         if (liked && !currentlyLiked) {
             // Add like
             Like like = new Like(userId, postId);
             likeRepository.save(like);
             post.setLikes(post.getLikes() + 1);
+            stateChanged = true;
             logger.info("Like added - postId: {}, userId: {}, total likes: {}", postId, userId, post.getLikes());
         } else if (!liked && currentlyLiked) {
             // Remove like
             likeRepository.deleteByUserIdAndPostId(userId, postId);
             post.setLikes(Math.max(0, post.getLikes() - 1));
+            stateChanged = true;
             logger.info("Like removed - postId: {}, userId: {}, total likes: {}", postId, userId, post.getLikes());
         } else {
             logger.debug("No change needed - postId: {}, userId: {}, liked: {}, currentlyLiked: {}", 
@@ -752,6 +805,19 @@ public class PostServiceImpl implements PostService {
         }
 
         post = postRepository.save(post);
+
+        // Emit like/unlike events only when state actually changed, so retries/idempotent
+        // client calls don't spam downstream notification fan-out.
+        if (stateChanged) {
+            try {
+                PostLikedEvent event = liked
+                        ? PostLikedEvent.liked(post.getId(), post.getUserId(), userId, post.getLikes())
+                        : PostLikedEvent.unliked(post.getId(), post.getUserId(), userId, post.getLikes());
+                postEventPublisher.publishPostLiked(event);
+            } catch (Exception ex) {
+                logger.warn("Failed to emit post.liked event for postId={}: {}", post.getId(), ex.toString());
+            }
+        }
 
         PostDto dto = PostDto.fromEntity(post, mediaServiceClient);
         // Populate user info from user service
@@ -882,6 +948,236 @@ public class PostServiceImpl implements PostService {
         dto.setIsSaved(!isSaved); // Toggle: if it was saved, now it's unsaved (false), and vice versa
 
         return dto;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public PageResponse<PostDto> listSavedPosts(String userId, int page, int limit, String collectionName) {
+        logger.debug("Listing saved posts - userId: {}, page: {}, limit: {}, collection: {}",
+                userId, page, limit, collectionName);
+
+        Pageable pageable = PageRequest.of(Math.max(0, page - 1), Math.max(1, limit));
+        boolean filterCollection = collectionName != null && !collectionName.isBlank();
+        Page<SavedPost> savedPage = filterCollection
+                ? savedPostRepository.findByUserIdAndCollectionNameOrderByCreatedAtDesc(
+                        userId, collectionName.trim(), pageable)
+                : savedPostRepository.findByUserIdOrderByCreatedAtDesc(userId, pageable);
+
+        if (savedPage.isEmpty()) {
+            return PageResponse.<PostDto>builder()
+                    .data(List.of())
+                    .page(page)
+                    .limit(limit)
+                    .totalPosts(0L)
+                    .totalPages(0)
+                    .hasNext(false)
+                    .hasPrev(page > 1)
+                    .build();
+        }
+
+        // Preserve save-time order when mapping back from the un-ordered findByIdIn result.
+        List<String> orderedPostIds = savedPage.getContent().stream()
+                .map(SavedPost::getPostId)
+                .toList();
+        Map<String, SavedPost> savedByPostId = savedPage.getContent().stream()
+                .collect(Collectors.toMap(SavedPost::getPostId, sp -> sp, (a, b) -> a));
+
+        List<Post> posts = postRepository.findByIdInAndDeletedAtIsNull(orderedPostIds);
+        Map<String, Post> postById = posts.stream()
+                .collect(Collectors.toMap(Post::getId, p -> p, (a, b) -> a));
+
+        List<Post> orderedPosts = new ArrayList<>(posts.size());
+        for (String id : orderedPostIds) {
+            Post p = postById.get(id);
+            if (p != null) orderedPosts.add(p);
+        }
+
+        List<PostDto> enriched = enrichPostsWithUserData(orderedPosts);
+        // Every item in this response is, by definition, saved by the viewer. Surface
+        // the collection name so the mobile client can render grouping chips without
+        // a second round-trip.
+        for (PostDto dto : enriched) {
+            dto.setIsSaved(true);
+            SavedPost sp = savedByPostId.get(dto.getId());
+            if (sp != null && dto.getMetadata() == null) {
+                Map<String, Object> meta = new HashMap<>();
+                meta.put("saved_collection", sp.getCollectionName());
+                dto.setMetadata(meta);
+            } else if (sp != null) {
+                dto.getMetadata().put("saved_collection", sp.getCollectionName());
+            }
+        }
+
+        return PageResponse.<PostDto>builder()
+                .data(enriched)
+                .page(page)
+                .limit(limit)
+                .totalPosts(savedPage.getTotalElements())
+                .totalPages(savedPage.getTotalPages())
+                .hasNext(savedPage.hasNext())
+                .hasPrev(savedPage.hasPrevious())
+                .build();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<SavedCollectionDto> listSavedCollections(String userId) {
+        logger.debug("Listing saved collections for userId: {}", userId);
+        List<String> names = savedPostRepository.findDistinctCollectionNamesByUserId(userId);
+        if (names.isEmpty()) {
+            return List.of();
+        }
+        List<SavedCollectionDto> result = new ArrayList<>(names.size());
+        Pageable firstOnly = PageRequest.of(0, 1);
+        for (String name : names) {
+            long count = savedPostRepository.countByUserIdAndCollectionName(userId, name);
+            String coverUrl = null;
+            // Resolve cover image from the most recently saved post in this collection.
+            // Failures here are non-fatal — we just render the tile without a cover.
+            try {
+                Page<SavedPost> latest = savedPostRepository
+                        .findByUserIdAndCollectionNameOrderByCreatedAtDesc(userId, name, firstOnly);
+                if (!latest.isEmpty()) {
+                    SavedPost sp = latest.getContent().get(0);
+                    Post p = postRepository.findByIdAndDeletedAtIsNull(sp.getPostId()).orElse(null);
+                    if (p != null) {
+                        if (p.getMediaItems() != null && !p.getMediaItems().isEmpty()) {
+                            coverUrl = p.getMediaItems().get(0).getUrl();
+                        }
+                        if ((coverUrl == null || coverUrl.isBlank()) && p.getContent() != null) {
+                            coverUrl = p.getContent();
+                        }
+                    }
+                }
+            } catch (Exception ex) {
+                logger.debug("cover lookup failed for collection '{}': {}", name, ex.toString());
+            }
+            result.add(new SavedCollectionDto(name, count, coverUrl));
+        }
+        return result;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public PageResponse<PostDto> listLikedPosts(String userId, int page, int limit) {
+        logger.debug("Listing liked posts - userId: {}, page: {}, limit: {}", userId, page, limit);
+
+        Pageable pageable = PageRequest.of(Math.max(0, page - 1), Math.max(1, limit));
+        Page<Like> likedPage = likeRepository.findByUserIdOrderByCreatedAtDesc(userId, pageable);
+
+        if (likedPage.isEmpty()) {
+            return PageResponse.<PostDto>builder()
+                    .data(List.of())
+                    .page(page)
+                    .limit(limit)
+                    .totalPosts(0L)
+                    .totalPages(0)
+                    .hasNext(false)
+                    .hasPrev(page > 1)
+                    .build();
+        }
+
+        // Keep like-order stable across the batch lookup so the most recent like
+        // stays first. Deleted posts are dropped silently so the grid never
+        // renders a dangling tile.
+        List<String> orderedPostIds = likedPage.getContent().stream()
+                .map(Like::getPostId)
+                .toList();
+        List<Post> posts = postRepository.findByIdInAndDeletedAtIsNull(orderedPostIds);
+        Map<String, Post> postById = posts.stream()
+                .collect(Collectors.toMap(Post::getId, p -> p, (a, b) -> a));
+
+        List<Post> orderedPosts = new ArrayList<>(posts.size());
+        for (String id : orderedPostIds) {
+            Post p = postById.get(id);
+            if (p != null) orderedPosts.add(p);
+        }
+
+        List<PostDto> enriched = enrichPostsWithUserData(orderedPosts);
+        // Every item in this response is, by definition, liked by the viewer.
+        // Pre-set the flag so the mobile client doesn't need to reconcile.
+        for (PostDto dto : enriched) {
+            dto.setIsLiked(true);
+        }
+
+        return PageResponse.<PostDto>builder()
+                .data(enriched)
+                .page(page)
+                .limit(limit)
+                .totalPosts(likedPage.getTotalElements())
+                .totalPages(likedPage.getTotalPages())
+                .hasNext(likedPage.hasNext())
+                .hasPrev(likedPage.hasPrevious())
+                .build();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public PageResponse<PostLikeUserDto> listPostLikers(String postId, int page, int limit) {
+        postRepository.findById(postId).orElseThrow(() -> new PostNotFoundException(postId));
+        int safeLimit = Math.min(100, Math.max(1, limit));
+        int safePage = Math.max(1, page);
+        Pageable pageable = PageRequest.of(
+                safePage - 1,
+                safeLimit,
+                Sort.by(Sort.Direction.DESC, "createdAt"));
+        Page<Like> likePage = likeRepository.findByPostIdOrderByCreatedAtDesc(postId, pageable);
+        if (likePage.isEmpty()) {
+            return PageResponse.<PostLikeUserDto>builder()
+                    .data(List.of())
+                    .page(safePage)
+                    .limit(safeLimit)
+                    .totalPosts(likePage.getTotalElements())
+                    .totalPages(likePage.getTotalPages())
+                    .hasNext(likePage.hasNext())
+                    .hasPrev(likePage.hasPrevious())
+                    .build();
+        }
+        List<PostLikeUserDto> rows = new ArrayList<>(likePage.getContent().size());
+        for (Like like : likePage.getContent()) {
+            rows.add(buildPostLikeUserDto(like.getUserId()));
+        }
+        return PageResponse.<PostLikeUserDto>builder()
+                .data(rows)
+                .page(safePage)
+                .limit(safeLimit)
+                .totalPosts(likePage.getTotalElements())
+                .totalPages(likePage.getTotalPages())
+                .hasNext(likePage.hasNext())
+                .hasPrev(likePage.hasPrevious())
+                .build();
+    }
+
+    private PostLikeUserDto buildPostLikeUserDto(String userIdStr) {
+        String displayName = "Traveler";
+        String username = "user";
+        String avatarUrl = "";
+        if (userIdStr == null || userIdStr.isBlank()) {
+            return new PostLikeUserDto("", username, displayName, avatarUrl);
+        }
+        String idRaw = userIdStr.trim();
+        try {
+            UUID uid = UUID.fromString(idRaw);
+            if (userServiceClient != null) {
+                com.travelo.postservice.client.dto.UserDto u = userServiceClient.getUser(uid);
+                if (u != null) {
+                    if (u.getName() != null && !u.getName().isBlank()) {
+                        displayName = u.getName().trim();
+                    } else if (u.getUsername() != null && !u.getUsername().isBlank()) {
+                        displayName = u.getUsername().trim();
+                    }
+                    if (u.getUsername() != null && !u.getUsername().isBlank()) {
+                        username = u.getUsername().trim();
+                    }
+                    if (u.getProfilePictureUrl() != null && !u.getProfilePictureUrl().isBlank()) {
+                        avatarUrl = u.getProfilePictureUrl().trim();
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            logger.debug("resolve liker display failed for userId={}: {}", idRaw, ex.toString());
+        }
+        return new PostLikeUserDto(idRaw, username, displayName, avatarUrl);
     }
 
     /**

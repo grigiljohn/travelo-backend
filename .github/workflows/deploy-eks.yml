@@ -1,0 +1,57 @@
+name: Deploy to EKS
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to roll out (short sha or custom)"
+        required: true
+        default: "latest"
+      services:
+        description: "Space-separated services to deploy (empty = all)"
+        required: false
+        default: ""
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-southeast-2
+  AWS_ROLE_ARN: ${{ secrets.AWS_CI_ROLE_ARN }}
+  CLUSTER_NAME: travelo-prod
+  NAMESPACE: travelo
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+
+      - name: kubeconfig
+        run: aws eks update-kubeconfig --name "${CLUSTER_NAME}" --region "${AWS_REGION}"
+
+      - uses: azure/setup-helm@v4
+        with: { version: "v3.14.0" }
+
+      - name: Helm rollout
+        env:
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          SERVICES: ${{ inputs.services }}
+        run: |
+          chmod +x scripts/helm-install-all.sh
+          ./scripts/helm-install-all.sh
+
+      - name: Verify rollout
+        run: |
+          kubectl -n "${NAMESPACE}" get deploy -o wide
+          kubectl -n "${NAMESPACE}" rollout status deploy -l app.kubernetes.io/name=travelo-backend --timeout=10m || true

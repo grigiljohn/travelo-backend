@@ -5,17 +5,18 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.travelo.feedservice.client.dto.AdDeliveryResponse;
 import com.travelo.feedservice.client.dto.PostDto;
 import com.travelo.feedservice.client.dto.StoryPreviewDto;
+import com.travelo.planservice.dto.PlanResponse;
 
 import java.util.List;
 
 /**
- * Unified feed item that can be post/reel/ad/story-cluster.
+ * Unified feed item that can be post/reel/ad/story-cluster/plan (circle event).
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class FeedItem {
     
     @JsonProperty("type")
-    private String type;  // "post" | "reel" | "ad" | "story_cluster"
+    private String type;  // "post" | "reel" | "ad" | "story_cluster" | "plan"
     
     // Post fields (when type = "post")
     @JsonProperty("post_id")
@@ -37,6 +38,13 @@ public class FeedItem {
 
     @JsonProperty("stories")
     private List<StoryPreviewDto> stories;
+
+    /** When type = "plan" — persisted circle plan / published event. */
+    @JsonProperty("plan_id")
+    private String planId;
+
+    @JsonProperty("plan")
+    private PlanResponse plan;
 
     public FeedItem() {
     }
@@ -73,6 +81,14 @@ public class FeedItem {
         return item;
     }
 
+    public static FeedItem fromPlan(PlanResponse p) {
+        FeedItem item = new FeedItem();
+        item.setType("plan");
+        item.setPlanId(p.id());
+        item.setPlan(p);
+        return item;
+    }
+
     // Getters and Setters
     public String getType() { return type; }
     public void setType(String type) { this.type = type; }
@@ -88,5 +104,9 @@ public class FeedItem {
     public void setStoryClusterId(String storyClusterId) { this.storyClusterId = storyClusterId; }
     public List<StoryPreviewDto> getStories() { return stories; }
     public void setStories(List<StoryPreviewDto> stories) { this.stories = stories; }
+    public String getPlanId() { return planId; }
+    public void setPlanId(String planId) { this.planId = planId; }
+    public PlanResponse getPlan() { return plan; }
+    public void setPlan(PlanResponse plan) { this.plan = plan; }
 }
 

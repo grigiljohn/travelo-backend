@@ -81,6 +81,18 @@ public class FeedMetricsServiceImpl implements FeedMetricsService {
                 .increment(Math.max(0, reorderedCount));
     }
 
+    @Override
+    public void recordSeenSuppressed(String surface, String mode, int count) {
+        if (count <= 0) {
+            return;
+        }
+        Counter.builder("feed.seen.suppressed")
+                .tag("surface", safe(surface))
+                .tag("mode", safe(mode))
+                .register(meterRegistry)
+                .increment(count);
+    }
+
     private String safe(String v) {
         if (v == null || v.isBlank()) {
             return "unknown";

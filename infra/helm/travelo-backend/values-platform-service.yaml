@@ -1,0 +1,19 @@
+service:
+  name: platform-service
+  port: 8099
+
+extraEnv:
+  - name: EUREKA_CLIENT_ENABLED
+    value: "false"
+  - name: SPRING_CONFIG_IMPORT
+    value: ""
+
+resources:
+  limits:   { cpu: 500m, memory: 512Mi }
+  requests: { cpu: 100m, memory: 256Mi }
+
+autoscaling:
+  enabled: true
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 75

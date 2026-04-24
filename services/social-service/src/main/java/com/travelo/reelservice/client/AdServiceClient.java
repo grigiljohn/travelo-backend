@@ -26,7 +26,7 @@ public class AdServiceClient {
 
     public AdServiceClient(
             ResilientWebClientConfig resilientWebClientConfig,
-            @Value("${app.ad-service.url:http://localhost:8093}") String adServiceBaseUrl) {
+            @Value("${app.ad-service.url:http://localhost:8097}") String adServiceBaseUrl) {
         this.webClient = resilientWebClientConfig.createResilientWebClient("ad-service", adServiceBaseUrl);
         logger.info("AdServiceClient initialized with base URL: {}", adServiceBaseUrl);
     }

@@ -1,0 +1,116 @@
+name: Build & push service images
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/**"
+      - "config/**"
+      - "registry/**"
+      - "libs/**"
+      - "pom.xml"
+      - "**/Dockerfile"
+      - ".github/workflows/docker-build-push.yml"
+  workflow_dispatch:
+    inputs:
+      services:
+        description: "Space-separated list (empty = all)"
+        required: false
+        default: ""
+      image_tag:
+        description: "Override image tag (default = short sha)"
+        required: false
+        default: ""
+
+permissions:
+  id-token: write    # needed for OIDC -> AWS
+  contents: read
+
+env:
+  AWS_REGION: ap-southeast-2
+  AWS_ROLE_ARN: ${{ secrets.AWS_CI_ROLE_ARN }}   # arn:aws:iam::ACCOUNT:role/github-actions-ci
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - { name: config-server,     path: config/config-server/Dockerfile }
+          - { name: service-registry,  path: registry/service-registry/Dockerfile }
+          - { name: api-gateway,       path: services/api-gateway/Dockerfile }
+          - { name: identity-service,  path: services/identity-service/Dockerfile }
+          - { name: social-service,    path: services/social-service/Dockerfile }
+          - { name: media-service,     path: services/media-service/Dockerfile }
+          - { name: discovery-service, path: services/discovery-service/Dockerfile }
+          - { name: realtime-service,  path: services/realtime-service/Dockerfile }
+          - { name: commerce-service,  path: services/commerce-service/Dockerfile }
+          - { name: platform-service,  path: services/platform-service/Dockerfile }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip if service filter excludes this one
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.services != '' && !contains(inputs.services, matrix.service.name) }}
+        run: |
+          echo "${{ matrix.service.name }} not in manual selection — skipping."
+          exit 0
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Ensure ECR repo exists
+        run: |
+          REPO="travelo/${{ matrix.service.name }}"
+          aws ecr describe-repositories --repository-names "$REPO" --region "${AWS_REGION}" \
+            || aws ecr create-repository --repository-name "$REPO" --region "${AWS_REGION}" \
+                --image-scanning-configuration scanOnPush=true \
+                --encryption-configuration encryptionType=AES256
+
+      - name: Compute tag
+        id: tag
+        run: |
+          if [[ -n "${{ inputs.image_tag }}" ]]; then
+            echo "tag=${{ inputs.image_tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build + push ${{ matrix.service.name }}
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ matrix.service.path }}
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: |
+            ${{ steps.ecr.outputs.registry }}/travelo/${{ matrix.service.name }}:${{ steps.tag.outputs.tag }}
+            ${{ steps.ecr.outputs.registry }}/travelo/${{ matrix.service.name }}:latest
+          cache-from: type=gha,scope=${{ matrix.service.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}
+
+  notify-deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    steps:
+      - name: Trigger EKS deployment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              workflow_id: 'deploy-eks.yml',
+              ref: 'main',
+              inputs: { image_tag: context.sha.substring(0, 12) }
+            });

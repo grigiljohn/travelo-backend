@@ -6,143 +6,153 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.data.redis.core.SetOperations;
+import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Redis-based implementation of seen posts tracking.
- * Uses Redis SET for O(1) membership checks via SISMEMBER.
- * 
- * Key format: seen:{userId}:{surface}
- * Value: SET of post IDs (strings)
- * TTL: Configurable (default 7 days)
+ * Redis ZSET-based implementation of seen-post tracking.
+ *
+ * <p>Key format: {@code seen:ts:{userId}:{surface}}<br>
+ * Score:       epoch seconds (first-seen-at)<br>
+ * Member:      post id string
+ *
+ * <p>The ZSET is trimmed opportunistically on each write: everything older
+ * than the retention TTL is removed via {@code ZREMRANGEBYSCORE}. We still
+ * call {@code EXPIRE} as a safety net so abandoned keys disappear.
  */
 @Service
 public class FeedSeenServiceImpl implements FeedSeenService {
 
     private static final Logger logger = LoggerFactory.getLogger(FeedSeenServiceImpl.class);
-    
-    private static final String SEEN_KEY_PREFIX = "seen:";
+
+    /** New ZSET namespace; distinct prefix so a hot cluster migrating from the
+     *  legacy SET layout doesn't trip over mixed types on the same key. */
+    private static final String SEEN_KEY_PREFIX = "seen:ts:";
+
     private static final int DEFAULT_TTL_DAYS = 7;
     private static final int MAX_TTL_DAYS = 30;
-    
+    private static final int DEFAULT_HARD_FILTER_WINDOW_HOURS = 24;
+
     private final RedisTemplate<String, String> redisTemplate;
-    private final SetOperations<String, String> setOps;
+    private final ZSetOperations<String, String> zsetOps;
     private final int ttlDays;
+    private final long ttlSeconds;
+    private final long hardFilterWindowSeconds;
     private final boolean enabled;
 
     public FeedSeenServiceImpl(
             @Qualifier("redisTemplate") RedisTemplate<String, String> redisTemplate,
             @Value("${app.feed.seen-ttl-days:" + DEFAULT_TTL_DAYS + "}") int ttlDays,
+            @Value("${app.feed.seen.hard-filter-window-hours:" + DEFAULT_HARD_FILTER_WINDOW_HOURS + "}") int hardFilterWindowHours,
             @Value("${app.feed.seen-enabled:true}") boolean enabled) {
         this.redisTemplate = redisTemplate;
-        this.setOps = redisTemplate.opsForSet();
-        this.ttlDays = Math.min(Math.max(ttlDays, 1), MAX_TTL_DAYS); // Clamp between 1 and 30 days
+        this.zsetOps = redisTemplate.opsForZSet();
+        this.ttlDays = Math.min(Math.max(ttlDays, 1), MAX_TTL_DAYS);
+        this.ttlSeconds = Duration.ofDays(this.ttlDays).getSeconds();
+        int clampedHardHours = Math.max(0, Math.min(hardFilterWindowHours, this.ttlDays * 24));
+        this.hardFilterWindowSeconds = Duration.ofHours(clampedHardHours).getSeconds();
         this.enabled = enabled;
+        logger.info("FeedSeenService initialized: enabled={}, ttlDays={}, hardFilterWindowHours={}",
+                enabled, this.ttlDays, clampedHardHours);
     }
 
     @Override
     public void markPostsAsSeen(UUID userId, String surface, Set<String> postIds) {
-        if (!enabled) {
-            logger.debug("Seen tracking disabled, skipping markPostsAsSeen for user {} surface {}", userId, surface);
+        if (!enabled || postIds == null || postIds.isEmpty()) {
             return;
         }
-        
-        if (postIds == null || postIds.isEmpty()) {
-            logger.debug("Empty postIds set, skipping markPostsAsSeen");
-            return;
-        }
-        
         String key = getSeenKey(userId, surface);
-        
+        long now = Instant.now().getEpochSecond();
         try {
-            // Use SADD to add all post IDs to the set (Redis handles deduplication)
-            String[] postIdArray = postIds.toArray(new String[0]);
-            Long added = setOps.add(key, postIdArray);
-            
-            // Set TTL on first add (only if key didn't exist before)
-            if (added != null && added > 0) {
-                redisTemplate.expire(key, ttlDays, TimeUnit.DAYS);
-                logger.debug("Marked {} posts as seen for user {} on surface {} ({} new)", 
-                        postIds.size(), userId, surface, added);
-            } else {
-                // Ensure TTL is set even if no new items were added
-                redisTemplate.expire(key, ttlDays, TimeUnit.DAYS);
-                logger.debug("Updated seen posts for user {} on surface {} (all already seen)", userId, surface);
+            Set<ZSetOperations.TypedTuple<String>> tuples = new HashSet<>(postIds.size());
+            for (String postId : postIds) {
+                if (postId == null || postId.isBlank()) continue;
+                tuples.add(ZSetOperations.TypedTuple.of(postId, (double) now));
             }
-            
+            if (tuples.isEmpty()) return;
+
+            // addIfAbsent preserves the first-seen timestamp on repeat exposures —
+            // essential for the hard-filter window to stay accurate.
+            zsetOps.addIfAbsent(key, tuples);
+            // Evict anything older than the retention horizon so the ZSET doesn't grow unbounded.
+            zsetOps.removeRangeByScore(key, 0, (double) (now - ttlSeconds));
+            redisTemplate.expire(key, ttlDays, TimeUnit.DAYS);
         } catch (Exception e) {
-            // Graceful degradation: log error but don't block
-            logger.error("Error marking posts as seen for user {} on surface {}: {}", 
-                    userId, surface, e.getMessage(), e);
+            logger.warn("flow=seen_mark_failed userId={} surface={} err={}", userId, surface, e.toString());
         }
+    }
+
+    @Override
+    public Map<String, SeenState> classifySeen(UUID userId, String surface, Set<String> postIds) {
+        if (postIds == null || postIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Map<String, SeenState> result = new HashMap<>(postIds.size());
+        if (!enabled) {
+            for (String id : postIds) result.put(id, SeenState.UNSEEN);
+            return result;
+        }
+
+        String key = getSeenKey(userId, surface);
+        long now = Instant.now().getEpochSecond();
+        long hardCutoff = now - hardFilterWindowSeconds;
+
+        try {
+            for (String postId : postIds) {
+                if (postId == null || postId.isBlank()) continue;
+                Double score = zsetOps.score(key, postId);
+                if (score == null) {
+                    result.put(postId, SeenState.UNSEEN);
+                } else if (score.longValue() >= hardCutoff) {
+                    result.put(postId, SeenState.HARD);
+                } else {
+                    result.put(postId, SeenState.SOFT);
+                }
+            }
+        } catch (Exception e) {
+            logger.warn("flow=seen_classify_failed userId={} surface={} err={}. Treating all as unseen.",
+                    userId, surface, e.toString());
+            for (String id : postIds) result.put(id, SeenState.UNSEEN);
+        }
+        return result;
     }
 
     @Override
     public Set<String> getSeenPostIds(UUID userId, String surface, Set<String> postIds) {
-        if (!enabled) {
-            logger.debug("Seen tracking disabled, returning empty set");
+        if (!enabled || postIds == null || postIds.isEmpty()) {
             return new HashSet<>();
         }
-        
-        if (postIds == null || postIds.isEmpty()) {
-            return new HashSet<>();
-        }
-        
-        String key = getSeenKey(userId, surface);
-        
-        try {
-            // Use SISMEMBER for each post ID (O(1) per check)
-            // Or use SINTER for batch check (more efficient for large sets)
-            Set<String> seenPostIds = new HashSet<>();
-            
-            // SINTER is more efficient for large sets, but we need to check if key exists first
-            // For simplicity and O(1) guarantees, we'll use individual SISMEMBER calls
-            // In production, you might want to batch these using pipeline for better performance
-            for (String postId : postIds) {
-                if (Boolean.TRUE.equals(setOps.isMember(key, postId))) {
-                    seenPostIds.add(postId);
-                }
+        Set<String> out = new HashSet<>();
+        Map<String, SeenState> classified = classifySeen(userId, surface, postIds);
+        for (Map.Entry<String, SeenState> e : classified.entrySet()) {
+            if (e.getValue() != SeenState.UNSEEN) {
+                out.add(e.getKey());
             }
-            
-            logger.debug("Found {} seen posts out of {} checked for user {} on surface {}", 
-                    seenPostIds.size(), postIds.size(), userId, surface);
-            
-            return seenPostIds;
-            
-        } catch (Exception e) {
-            // Graceful degradation: log warning and return empty set (treat all as unseen)
-            logger.warn("Error checking seen posts for user {} on surface {}: {}. Treating all as unseen.", 
-                    userId, surface, e.getMessage());
-            return new HashSet<>();
         }
+        return out;
     }
 
     @Override
     public boolean isPostSeen(UUID userId, String surface, String postId) {
-        if (!enabled) {
+        if (!enabled || postId == null || postId.isBlank()) {
             return false;
         }
-        
-        if (postId == null || postId.isEmpty()) {
-            return false;
-        }
-        
-        String key = getSeenKey(userId, surface);
-        
         try {
-            // O(1) operation using SISMEMBER
-            Boolean isMember = setOps.isMember(key, postId);
-            return Boolean.TRUE.equals(isMember);
+            Double score = zsetOps.score(getSeenKey(userId, surface), postId);
+            return score != null;
         } catch (Exception e) {
-            // Graceful degradation: return false (treat as unseen)
-            logger.warn("Error checking if post {} is seen for user {} on surface {}: {}. Treating as unseen.", 
-                    postId, userId, surface, e.getMessage());
+            logger.debug("flow=seen_lookup_failed userId={} surface={} postId={} err={}",
+                    userId, surface, postId, e.toString());
             return false;
         }
     }
@@ -152,19 +162,21 @@ public class FeedSeenServiceImpl implements FeedSeenService {
         String key = getSeenKey(userId, surface);
         try {
             redisTemplate.delete(key);
-            logger.info("Cleared seen posts for user {} on surface {}", userId, surface);
+            logger.info("flow=seen_cleared userId={} surface={}", userId, surface);
         } catch (Exception e) {
-            logger.error("Error clearing seen posts for user {} on surface {}: {}", 
-                    userId, surface, e.getMessage(), e);
+            logger.warn("flow=seen_clear_failed userId={} surface={} err={}", userId, surface, e.toString());
         }
     }
 
-    /**
-     * Generate Redis key for seen posts.
-     * Format: seen:{userId}:{surface}
-     */
     private String getSeenKey(UUID userId, String surface) {
-        return SEEN_KEY_PREFIX + userId.toString() + ":" + surface;
+        return SEEN_KEY_PREFIX + userId + ":" + normalizeSurface(surface);
     }
-}
 
+    private static String normalizeSurface(String surface) {
+        if (surface == null || surface.isBlank()) {
+            return "home";
+        }
+        return surface.trim().toLowerCase();
+    }
+
+}

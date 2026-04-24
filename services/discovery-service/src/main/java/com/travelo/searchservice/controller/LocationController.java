@@ -1,5 +1,6 @@
 package com.travelo.searchservice.controller;
 
+import com.travelo.searchservice.places.GooglePlacesService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.slf4j.Logger;
@@ -11,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -21,8 +23,14 @@ public class LocationController {
 
     private static final Logger logger = LoggerFactory.getLogger(LocationController.class);
 
+    private final GooglePlacesService googlePlacesService;
+
+    public LocationController(GooglePlacesService googlePlacesService) {
+        this.googlePlacesService = googlePlacesService;
+    }
+
     @GetMapping
-    @Operation(summary = "Search locations", description = "Returns hardcoded location suggestions for tagging")
+    @Operation(summary = "Search locations", description = "Uses Google Places when configured; otherwise demo suggestions")
     public ResponseEntity<Map<String, Object>> searchLocations(
             @RequestParam(value = "q", defaultValue = "") String query,
             @RequestParam(value = "limit", defaultValue = "12") int limit
@@ -32,6 +40,96 @@ public class LocationController {
 
         logger.info("GET /api/v1/locations - q='{}', limit={}", query, safeLimit);
 
+        if (googlePlacesService.isConfigured() && query.trim().length() >= 2) {
+            List<Map<String, Object>> rows = googlePlacesService
+                    .autocompleteWithDetails(query.trim(), safeLimit)
+                    .stream()
+                    .map(googlePlacesService::toApiLocationRow)
+                    .toList();
+            if (!rows.isEmpty()) {
+                return ResponseEntity.ok(Map.of(
+                        "success", true,
+                        "query", query,
+                        "count", rows.size(),
+                        "data", rows
+                ));
+            }
+        }
+
+        final List<Map<String, Object>> filtered = filterHardcoded(normalized, safeLimit);
+        return ResponseEntity.ok(Map.of(
+                "success", true,
+                "query", query,
+                "count", filtered.size(),
+                "data", filtered
+        ));
+    }
+
+    @GetMapping("/nearby")
+    @Operation(summary = "Nearby locations", description = "Uses Google Nearby Search when configured; otherwise demo pins")
+    public ResponseEntity<Map<String, Object>> nearbyLocations(
+            @RequestParam("lat") double lat,
+            @RequestParam("lng") double lng,
+            @RequestParam(value = "limit", defaultValue = "8") int limit
+    ) {
+        final int safeLimit = Math.min(Math.max(limit, 1), 50);
+        logger.info("GET /api/v1/locations/nearby - lat={}, lng={}, limit={}", lat, lng, safeLimit);
+
+        if (googlePlacesService.isConfigured()) {
+            List<Map<String, Object>> rows = googlePlacesService
+                    .nearbyPlaces(lat, lng, safeLimit)
+                    .stream()
+                    .map(googlePlacesService::toApiLocationRow)
+                    .toList();
+            if (!rows.isEmpty()) {
+                return ResponseEntity.ok(Map.of(
+                        "success", true,
+                        "count", rows.size(),
+                        "data", rows
+                ));
+            }
+        }
+
+        final List<Map<String, Object>> data = List.of(
+                location("loc_near_1", "Sunset Point", "1.2 km away", lat + 0.0042, lng + 0.0031, "viewpoint"),
+                location("loc_near_2", "Old Town Walk", "2.4 km away", lat + 0.0101, lng - 0.0022, "heritage"),
+                location("loc_near_3", "Local Food Street", "0.9 km away", lat - 0.0039, lng + 0.0015, "food"),
+                location("loc_near_4", "Riverside Promenade", "3.1 km away", lat + 0.0069, lng + 0.0080, "waterfront"),
+                location("loc_near_5", "City Museum", "4.0 km away", lat - 0.0115, lng - 0.0040, "museum"),
+                location("loc_near_6", "Night Market", "2.1 km away", lat + 0.0074, lng - 0.0054, "market")
+        );
+
+        return ResponseEntity.ok(Map.of(
+                "success", true,
+                "count", Math.min(data.size(), safeLimit),
+                "data", data.subList(0, Math.min(data.size(), safeLimit))
+        ));
+    }
+
+    @GetMapping("/details")
+    @Operation(summary = "Place details", description = "Google Place Details by place_id (server key)")
+    public ResponseEntity<Map<String, Object>> placeDetails(
+            @RequestParam("place_id") String placeId
+    ) {
+        if (!googlePlacesService.isConfigured()) {
+            return ResponseEntity.status(503).body(Map.of(
+                    "success", false,
+                    "message", "Google Places is not configured on the server"
+            ));
+        }
+        String pid = placeId == null ? "" : placeId.trim();
+        if (pid.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("success", false, "message", "place_id required"));
+        }
+        return googlePlacesService.fetchPlaceDetailsMap(pid)
+                .map(data -> ResponseEntity.ok(Map.<String, Object>of("success", true, "data", data)))
+                .orElseGet(() -> ResponseEntity.status(404).body(Map.of(
+                        "success", false,
+                        "message", "Place not found"
+                )));
+    }
+
+    private static List<Map<String, Object>> filterHardcoded(String normalized, int safeLimit) {
         final List<Map<String, Object>> all = List.of(
                 location("loc_fort_kochi", "Fort Kochi Beach", "Kochi, India", 9.9652, 76.2428, "landmark"),
                 location("loc_marine_drive_kochi", "Marine Drive", "Kochi, India", 9.9792, 76.2768, "waterfront"),
@@ -62,42 +160,10 @@ public class LocationController {
                 break;
             }
         }
-
-        return ResponseEntity.ok(Map.of(
-                "success", true,
-                "query", query,
-                "count", filtered.size(),
-                "data", filtered
-        ));
+        return filtered;
     }
 
-    @GetMapping("/nearby")
-    @Operation(summary = "Nearby locations", description = "Returns hardcoded nearby locations for tagging")
-    public ResponseEntity<Map<String, Object>> nearbyLocations(
-            @RequestParam("lat") double lat,
-            @RequestParam("lng") double lng,
-            @RequestParam(value = "limit", defaultValue = "8") int limit
-    ) {
-        final int safeLimit = Math.min(Math.max(limit, 1), 50);
-        logger.info("GET /api/v1/locations/nearby - lat={}, lng={}, limit={}", lat, lng, safeLimit);
-
-        final List<Map<String, Object>> data = List.of(
-                location("loc_near_1", "Sunset Point", "1.2 km away", lat + 0.0042, lng + 0.0031, "viewpoint"),
-                location("loc_near_2", "Old Town Walk", "2.4 km away", lat + 0.0101, lng - 0.0022, "heritage"),
-                location("loc_near_3", "Local Food Street", "0.9 km away", lat - 0.0039, lng + 0.0015, "food"),
-                location("loc_near_4", "Riverside Promenade", "3.1 km away", lat + 0.0069, lng + 0.0080, "waterfront"),
-                location("loc_near_5", "City Museum", "4.0 km away", lat - 0.0115, lng - 0.0040, "museum"),
-                location("loc_near_6", "Night Market", "2.1 km away", lat + 0.0074, lng - 0.0054, "market")
-        );
-
-        return ResponseEntity.ok(Map.of(
-                "success", true,
-                "count", Math.min(data.size(), safeLimit),
-                "data", data.subList(0, Math.min(data.size(), safeLimit))
-        ));
-    }
-
-    private Map<String, Object> location(
+    private static Map<String, Object> location(
             String id,
             String name,
             String subtitle,
@@ -105,13 +171,13 @@ public class LocationController {
             double lng,
             String type
     ) {
-        return Map.of(
-                "id", id,
-                "name", name,
-                "subtitle", subtitle,
-                "type", type,
-                "lat", lat,
-                "lng", lng
-        );
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", id);
+        m.put("name", name);
+        m.put("subtitle", subtitle);
+        m.put("type", type);
+        m.put("lat", lat);
+        m.put("lng", lng);
+        return m;
     }
 }

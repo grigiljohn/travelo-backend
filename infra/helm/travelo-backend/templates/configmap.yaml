@@ -1,3 +1,4 @@
+{{- if .Values.configMap.enabled -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -6,34 +7,5 @@ metadata:
     {{- include "travelo-backend.labels" . | nindent 4 }}
     app.kubernetes.io/component: {{ .Values.service.name }}
 data:
-  application.yml: |
-    spring:
-      application:
-        name: {{ .Values.service.name }}
-      datasource:
-        url: ${SPRING_DATASOURCE_URL}
-        username: ${SPRING_DATASOURCE_USERNAME}
-        password: ${SPRING_DATASOURCE_PASSWORD}
-      {{- if .Values.kafka.bootstrapServers }}
-      kafka:
-        bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
-      {{- end }}
-      {{- if .Values.redis.host }}
-      data:
-        redis:
-          host: ${SPRING_DATA_REDIS_HOST}
-          port: ${SPRING_DATA_REDIS_PORT}
-          {{- if .Values.redis.password }}
-          password: ${SPRING_DATA_REDIS_PASSWORD}
-          {{- end }}
-      {{- end }}
-    management:
-      endpoints:
-        web:
-          exposure:
-            include: health,info,metrics,prometheus
-      endpoint:
-        health:
-          probes:
-            enabled: true
-
+  {{- toYaml .Values.configMap.data | nindent 2 }}
+{{- end }}

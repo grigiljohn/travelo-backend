@@ -82,7 +82,8 @@ eureka:
     prefer-ip-address: true
 
 cors:
-  allowed-origins: ${CORS_ORIGINS:http://localhost:3000}
+  # Travelo Admin (3000) and Travelo Ads (Vite dev, 3001) — override with CORS_ORIGINS if needed.
+  allowed-origins: ${CORS_ORIGINS:http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001}
   allowed-methods: GET,POST,PUT,DELETE,PATCH,OPTIONS
   allowed-headers: "*"
   allow-credentials: true
@@ -109,3 +110,9 @@ media:
 app:
   ad-service:
     url: ${INTERNAL_AD_SERVICE_URL:http://localhost:8097}
+
+# Stripe (ad wallet & cards). For local dev use Stripe test keys; webhook: stripe listen --forward-to localhost:8097/api/v1/billing/stripe/webhook
+stripe:
+  secret-key: ${STRIPE_SECRET_KEY:}
+  webhook-secret: ${STRIPE_WEBHOOK_SECRET:}
+  publishable-key: ${STRIPE_PUBLISHABLE_KEY:}

@@ -3,6 +3,7 @@ package com.travelo.mediaservice.service;
 import com.travelo.mediaservice.dto.*;
 import com.travelo.mediaservice.entity.MediaFile;
 
+import java.io.File;
 import java.util.List;
 import java.util.UUID;
 
@@ -18,8 +19,16 @@ public interface MediaUploadService {
     DirectUploadResponse uploadFile(org.springframework.web.multipart.MultipartFile file,
                                    UUID ownerId,
                                    String filename,
-                                   String mimeType,
+                                    String mimeType,
                                    String mediaType);
+
+    /**
+     * Persist a fully processed reel MP4 (720×1280) without running the default transcode pipeline again.
+     */
+    DirectUploadResponse uploadReelProcessedDelivery(UUID ownerId, File processedMp4, String filename) throws java.io.IOException;
+
+    /** Same as {@link #uploadFile} but from raw bytes (e.g. reel pipeline fallback). */
+    DirectUploadResponse uploadRawBytes(UUID ownerId, byte[] data, String filename, String mimeType, String mediaType);
 
     /**
      * Generate presigned upload URL (single PUT or multipart).

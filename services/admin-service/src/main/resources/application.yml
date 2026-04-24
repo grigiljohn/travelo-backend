@@ -1,0 +1,46 @@
+server:
+  port: ${PORT:8190}
+  error:
+    include-message: always
+
+spring:
+  application:
+    name: admin-service
+  datasource:
+    url: ${ADMIN_DATASOURCE_URL:jdbc:postgresql://localhost:5432/travelo_admin}
+    username: ${ADMIN_DATASOURCE_USER:postgres}
+    password: ${ADMIN_DATASOURCE_PASSWORD:postgres}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    properties:
+      hibernate:
+        default_schema: public
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+app:
+  admin:
+    jwt:
+      secret: ${ADMIN_JWT_SECRET:changeMeAdminJwtSecretKeyMinimum32BytesLong!!}
+      expiration-ms: ${ADMIN_JWT_EXPIRATION_MS:86400000}
+    cors:
+      # Comma-separated. Include 127.0.0.1 if you open the Next dev server via that host (browser origin must match).
+      allowed-origins: ${ADMIN_CORS_ORIGINS:http://localhost:3000,http://127.0.0.1:3000}
+
+# Demo stats (connect identity/social in prod)
+  metrics:
+    users-total-override: ${DASHBOARD_USERS_OVERRIDE:}
+    posts-total-override: ${DASHBOARD_POSTS_OVERRIDE:}
+
+logging:
+  level:
+    com.travelo.admin: INFO
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

@@ -2,7 +2,9 @@ package com.travelo.searchservice.service.impl;
 
 import com.travelo.searchservice.document.*;
 import com.travelo.searchservice.dto.*;
+import com.travelo.searchservice.places.GooglePlacesService;
 import com.travelo.searchservice.repository.*;
+import com.travelo.searchservice.seed.ExploreFeedSeed;
 import com.travelo.searchservice.service.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,6 +32,7 @@ public class SearchServiceImpl implements SearchService {
     private final RelevanceScorerService relevanceScorerService;
     private final SearchResultGroupingService groupingService;
     private final com.travelo.searchservice.client.UserServiceClient userServiceClient;
+    private final GooglePlacesService googlePlacesService;
 
     public SearchServiceImpl(
             @Lazy PostDocumentRepository postRepository,
@@ -41,7 +44,8 @@ public class SearchServiceImpl implements SearchService {
             PrivacyFilterService privacyFilterService,
             RelevanceScorerService relevanceScorerService,
             SearchResultGroupingService groupingService,
-            com.travelo.searchservice.client.UserServiceClient userServiceClient) {
+            com.travelo.searchservice.client.UserServiceClient userServiceClient,
+            GooglePlacesService googlePlacesService) {
         this.postRepository = postRepository;
         this.userRepository = userRepository;
         this.hashtagRepository = hashtagRepository;
@@ -52,6 +56,7 @@ public class SearchServiceImpl implements SearchService {
         this.relevanceScorerService = relevanceScorerService;
         this.groupingService = groupingService;
         this.userServiceClient = userServiceClient;
+        this.googlePlacesService = googlePlacesService;
     }
 
     @Override
@@ -267,6 +272,28 @@ public class SearchServiceImpl implements SearchService {
 
     @Override
     public SearchResponse searchLocations(String query, int page, int limit) {
+        String q = query == null ? "" : query.trim();
+        if (googlePlacesService.isConfigured() && q.length() >= 2 && !"*".equals(q)) {
+            try {
+                List<GooglePlacesService.ResolvedPlace> resolved =
+                        googlePlacesService.autocompleteWithDetails(q, limit);
+                if (!resolved.isEmpty()) {
+                    List<SearchResultItem> googleItems = resolved.stream()
+                            .map(r -> SearchResultItem.fromGooglePlace(
+                                    r.placeId(),
+                                    r.primaryName(),
+                                    r.secondaryText(),
+                                    r.lat(),
+                                    r.lng(),
+                                    r.formattedAddress()))
+                            .collect(Collectors.toList());
+                    return new SearchResponse(googleItems, (long) googleItems.size(), page, limit, false);
+                }
+            } catch (Exception e) {
+                logger.warn("Google Places search failed, using Elasticsearch: {}", e.getMessage());
+            }
+        }
+
         Pageable pageable = PageRequest.of(page - 1, limit);
         Page<LocationDocument> results = locationRepository.findByNameContainingOrCityContainingOrCountryContaining(
                 query, query, query, pageable);
@@ -563,8 +590,9 @@ public class SearchServiceImpl implements SearchService {
             Page<PostDocument> results = postRepository.findByPostType("reel", pageable);
             
             if (results == null || results.getContent() == null) {
-                logger.warn("No reels found for explore feed");
-                return new SearchResponse(new ArrayList<>(), 0L, page, limit, false);
+                logger.warn("No reels found for explore feed — returning curated seed");
+                List<SearchResultItem> seed = ExploreFeedSeed.posts(limit);
+                return new SearchResponse(seed, (long) seed.size(), page, limit, false);
             }
             
             // Build user privacy map
@@ -599,8 +627,13 @@ public class SearchServiceImpl implements SearchService {
                         }
                     })
                     .filter(item -> item != null)
-                    .collect(Collectors.toList());
-            
+                    .collect(Collectors.toCollection(ArrayList::new));
+
+            if (items.isEmpty()) {
+                logger.info("Explore feed empty after query — returning curated seed (page={}, limit={})", page, limit);
+                items.addAll(ExploreFeedSeed.posts(Math.min(Math.max(limit, 1), 16)));
+            }
+
             logger.info("Found {} reels for explore feed", items.size());
             return new SearchResponse(items, (long) items.size(), page, limit, items.size() >= limit);
         } catch (Exception e) {
@@ -636,8 +669,9 @@ public class SearchServiceImpl implements SearchService {
             }
             
             if (results == null || results.getContent() == null) {
-                logger.warn("No reels found for nearby feed");
-                return new SearchResponse(new ArrayList<>(), 0L, page, limit, false);
+                logger.warn("No reels found for nearby feed — returning curated seed");
+                List<SearchResultItem> seed = ExploreFeedSeed.posts(limit);
+                return new SearchResponse(seed, (long) seed.size(), page, limit, false);
             }
             
             // Build user privacy map
@@ -677,8 +711,13 @@ public class SearchServiceImpl implements SearchService {
                         }
                         return 0;
                     })
-                    .collect(Collectors.toList());
-            
+                    .collect(Collectors.toCollection(ArrayList::new));
+
+            if (items.isEmpty()) {
+                logger.info("Nearby feed empty after query — returning curated seed (page={}, limit={})", page, limit);
+                items.addAll(ExploreFeedSeed.posts(Math.min(Math.max(limit, 1), 16)));
+            }
+
             logger.info("Found {} reels for nearby feed", items.size());
             return new SearchResponse(items, (long) items.size(), page, limit, items.size() >= limit);
         } catch (Exception e) {

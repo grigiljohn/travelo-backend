@@ -60,5 +60,28 @@ public interface PostService {
      * If the post is already saved, it will be unsaved. If not saved, it will be saved.
      */
     PostDto savePost(String postId, String userId, SavePostRequest request);
+
+    /**
+     * List posts the given user has saved, most recent first.
+     * Optionally filter by a specific collection name (null = all collections).
+     */
+    PageResponse<PostDto> listSavedPosts(String userId, int page, int limit, String collectionName);
+
+    /**
+     * Return the user's saved-post collections (name, size, cover image).
+     */
+    List<SavedCollectionDto> listSavedCollections(String userId);
+
+    /**
+     * List posts the given user has liked, most recent like first. Soft-deleted
+     * posts (or posts the author has since taken down) are skipped so the
+     * profile grid never shows a dangling tile.
+     */
+    PageResponse<PostDto> listLikedPosts(String userId, int page, int limit);
+
+    /**
+     * Paginated list of users who liked the post (newest like first), with display names from user-service when available.
+     */
+    PageResponse<PostLikeUserDto> listPostLikers(String postId, int page, int limit);
 }
 

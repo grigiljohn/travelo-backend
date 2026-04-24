@@ -38,6 +38,7 @@
         <module>services/realtime-service</module>
         <module>services/commerce-service</module>
         <module>services/platform-service</module>
+        <module>services/admin-service</module>
     </modules>
 
     <dependencyManagement>

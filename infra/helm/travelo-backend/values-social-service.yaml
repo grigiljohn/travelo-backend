@@ -1,0 +1,31 @@
+service:
+  name: social-service
+  port: 8096
+
+extraEnv:
+  - name: EUREKA_CLIENT_ENABLED
+    value: "false"
+  - name: SPRING_CONFIG_IMPORT
+    value: ""
+  - name: MEDIA_SERVICE_URL
+    value: "http://travelo-media-service:8084"
+  - name: USER_SERVICE_URL
+    value: "http://travelo-identity-service:8081"
+
+envFrom:
+  - secretRef:
+      name: travelo-social-service-secrets
+  # Expected keys: POSTGRES_URL, STORY_DATASOURCE_URL, REEL_DATASOURCE_URL,
+  # POSTGRES_USERNAME, POSTGRES_PASSWORD (+ story/reel variants),
+  # REDIS_HOST, REDIS_PORT, REDIS_PASSWORD,
+  # KAFKA_BOOTSTRAP_SERVERS (MSK bootstrap), JWT_SECRET
+
+resources:
+  limits:   { cpu: 1500m, memory: 1.5Gi }
+  requests: { cpu: 500m,  memory: 768Mi }
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 12
+  targetCPUUtilizationPercentage: 70

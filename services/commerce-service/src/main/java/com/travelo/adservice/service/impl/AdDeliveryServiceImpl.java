@@ -13,6 +13,7 @@ import com.travelo.adservice.repository.AdGroupRepository;
 import com.travelo.adservice.repository.CampaignRepository;
 import com.travelo.adservice.repository.AssetRepository;
 import com.travelo.adservice.service.AdDeliveryService;
+import com.travelo.adservice.service.CampaignMetricsService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -35,16 +36,19 @@ public class AdDeliveryServiceImpl implements AdDeliveryService {
     private final AdGroupRepository adGroupRepository;
     private final CampaignRepository campaignRepository;
     private final AssetRepository assetRepository;
+    private final CampaignMetricsService campaignMetricsService;
 
     public AdDeliveryServiceImpl(
             AdRepository adRepository,
             AdGroupRepository adGroupRepository,
             CampaignRepository campaignRepository,
-            AssetRepository assetRepository) {
+            AssetRepository assetRepository,
+            CampaignMetricsService campaignMetricsService) {
         this.adRepository = adRepository;
         this.adGroupRepository = adGroupRepository;
         this.campaignRepository = campaignRepository;
         this.assetRepository = assetRepository;
+        this.campaignMetricsService = campaignMetricsService;
     }
 
     @Override
@@ -91,6 +95,14 @@ public class AdDeliveryServiceImpl implements AdDeliveryService {
         List<Ad> selectedAds = candidateAds.stream()
                 .limit(count)
                 .collect(Collectors.toList());
+
+        if (!selectedAds.isEmpty()) {
+            try {
+                campaignMetricsService.recordDeliveryImpressions(selectedAds);
+            } catch (Exception e) {
+                log.warn("Failed to record delivery metrics (ads still returned): {}", e.getMessage());
+            }
+        }
 
         // Convert to AdDeliveryResponse
         return selectedAds.stream()

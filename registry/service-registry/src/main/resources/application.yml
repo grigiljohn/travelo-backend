@@ -4,8 +4,9 @@ server:
 spring:
   application:
     name: service-registry
+  # Quoted: multiple ":" in value breaks YAML unless quoted. Use localhost for IDE; override in Docker/K8s.
   config:
-    import: optional:configserver:http://config-server:8888
+    import: "${SPRING_CONFIG_IMPORT:optional:configserver:http://localhost:8888}"
 
 logging:
   pattern:

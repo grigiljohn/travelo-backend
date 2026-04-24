@@ -35,6 +35,13 @@ public interface PostRepository extends JpaRepository<Post, String> {
             @Param("mood") MoodType mood,
             Pageable pageable);
     
+    /**
+     * Batch-load non-deleted posts by id. Order is not preserved here — callers that
+     * need a specific order (e.g. saved-posts by save-time) must re-sort the result.
+     */
+    @Query("SELECT p FROM Post p WHERE p.id IN :ids AND p.deletedAt IS NULL")
+    List<Post> findByIdInAndDeletedAtIsNull(@Param("ids") List<String> ids);
+
     // Debug method - count all posts (including deleted)
     long count();
     

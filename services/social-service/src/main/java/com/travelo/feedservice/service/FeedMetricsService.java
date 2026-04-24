@@ -13,5 +13,12 @@ public interface FeedMetricsService {
     void recordOnlineSignalEvent(String eventType);
 
     void recordFatigueReorder(String surface, int reorderedCount);
+
+    /**
+     * Record how many posts were suppressed by the seen tracker during a single
+     * feed response, split by {@code mode} ({@code hard} filter vs {@code soft}
+     * demote).
+     */
+    void recordSeenSuppressed(String surface, String mode, int count);
 }
 

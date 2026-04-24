@@ -2,7 +2,13 @@ package com.travelo.mediaservice.controller;
 
 import com.travelo.mediaservice.dto.*;
 import com.travelo.mediaservice.entity.MediaFile;
+import com.travelo.mediaservice.reel.ReelFilterType;
+import com.travelo.mediaservice.reel.ReelCapabilitiesService;
+import com.travelo.mediaservice.reel.ReelJobProgressBroker;
+import com.travelo.mediaservice.reel.ReelJobProgressTracker;
+import com.travelo.mediaservice.reel.ReelJobStage;
 import com.travelo.mediaservice.service.MediaUploadService;
+import com.travelo.mediaservice.service.ReelVideoPipelineService;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,6 +20,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
 import java.util.Locale;
@@ -34,6 +41,10 @@ public class MediaController {
     private final com.travelo.mediaservice.service.MediaProcessingService mediaProcessingService;
     private final com.travelo.mediaservice.service.LocalStorageService localStorageService;
     private final com.travelo.mediaservice.service.MediaContentResolutionService contentResolutionService;
+    private final ReelVideoPipelineService reelVideoPipelineService;
+    private final ReelCapabilitiesService reelCapabilitiesService;
+    private final ReelJobProgressTracker reelJobProgressTracker;
+    private final ReelJobProgressBroker reelJobProgressBroker;
     private final boolean enforceReadSafety;
     private final boolean requireReadyStateForServing;
     private final String moderationAdminToken;
@@ -42,6 +53,10 @@ public class MediaController {
                           com.travelo.mediaservice.service.MediaProcessingService mediaProcessingService,
                           com.travelo.mediaservice.service.LocalStorageService localStorageService,
                           com.travelo.mediaservice.service.MediaContentResolutionService contentResolutionService,
+                          ReelVideoPipelineService reelVideoPipelineService,
+                          ReelCapabilitiesService reelCapabilitiesService,
+                          ReelJobProgressTracker reelJobProgressTracker,
+                          ReelJobProgressBroker reelJobProgressBroker,
                           @org.springframework.beans.factory.annotation.Value("${media.moderation.enforce-read-safety:true}") boolean enforceReadSafety,
                           @org.springframework.beans.factory.annotation.Value("${media.moderation.require-ready-state-for-serving:true}") boolean requireReadyStateForServing,
                           @org.springframework.beans.factory.annotation.Value("${media.moderation.admin-token:}") String moderationAdminToken) {
@@ -49,6 +64,10 @@ public class MediaController {
         this.mediaProcessingService = mediaProcessingService;
         this.localStorageService = localStorageService;
         this.contentResolutionService = contentResolutionService;
+        this.reelVideoPipelineService = reelVideoPipelineService;
+        this.reelCapabilitiesService = reelCapabilitiesService;
+        this.reelJobProgressTracker = reelJobProgressTracker;
+        this.reelJobProgressBroker = reelJobProgressBroker;
         this.enforceReadSafety = enforceReadSafety;
         this.requireReadyStateForServing = requireReadyStateForServing;
         this.moderationAdminToken = moderationAdminToken;
@@ -76,6 +95,151 @@ public class MediaController {
                 file.getSize(),
                 mediaType);
         return mediaUploadService.uploadFile(file, ownerId, name, file.getContentType(), mediaType);
+    }
+
+    /**
+     * Reel delivery pipeline: smart trim, FFmpeg filters, 9:16 720×1280, optional library music, fast H.264.
+     * POST /v1/media/reel/process-upload
+     */
+    @PostMapping(value = "/reel/process-upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @ResponseStatus(HttpStatus.CREATED)
+    public ReelProcessResponse processReelUpload(
+            @RequestParam("owner_id") UUID ownerId,
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "filter_type", defaultValue = "NONE") String filterType,
+            @RequestParam(value = "music_enabled", defaultValue = "true") boolean musicEnabled,
+            @RequestParam(value = "client_job_id", required = false) String clientJobId) throws IOException {
+        log.info("POST /v1/media/reel/process-upload ownerId={} filter={} music={} size={} jobId={}",
+                ownerId, filterType, musicEnabled, file.getSize(), clientJobId);
+        return reelVideoPipelineService.processAndRegister(
+                file, ownerId, ReelFilterType.fromParam(filterType), musicEnabled, clientJobId);
+    }
+
+    /**
+     * Returns reel pipeline capabilities for clients/admins.
+     */
+    @GetMapping("/reel/capabilities")
+    @ResponseStatus(HttpStatus.OK)
+    public ReelCapabilitiesResponse reelCapabilities() {
+        return reelCapabilitiesService.getCapabilities();
+    }
+
+    /**
+     * Poll current reel pipeline stage for a job previously started with
+     * {@code client_job_id}. Returns {@code stage=UNKNOWN} if the job id is not (yet)
+     * tracked; clients should treat that as "still uploading / queued".
+     * <p>
+     * GET /v1/media/reel/jobs/{jobId}
+     */
+    @GetMapping("/reel/jobs/{jobId}")
+    @ResponseStatus(HttpStatus.OK)
+    public ReelJobProgressResponse reelJobProgress(@PathVariable("jobId") String jobId) {
+        ReelJobProgressTracker.Snapshot snap = reelJobProgressTracker.get(jobId);
+        if (snap == null) {
+            return new ReelJobProgressResponse(jobId, "UNKNOWN", 0, null, java.time.Instant.now());
+        }
+        ReelJobStage stage = snap.stage();
+        int percent = snap.percent() != null ? snap.percent() : percentForStage(stage);
+        return new ReelJobProgressResponse(
+                jobId,
+                stage.name(),
+                percent,
+                snap.message(),
+                snap.updatedAt()
+        );
+    }
+
+    private static int percentForStage(ReelJobStage stage) {
+        if (stage == null) {
+            return 0;
+        }
+        return switch (stage) {
+            case QUEUED -> 5;
+            case OPTIMIZING -> 25;
+            case FILTERING -> 55;
+            case MUSIC -> 80;
+            case FINALIZING -> 92;
+            case READY -> 100;
+            case FAILED -> 100;
+        };
+    }
+
+    /**
+     * SSE stream of reel pipeline stage transitions for a job.
+     * Sends an initial {@code progress} event with the current snapshot (if any),
+     * then pushes a new event for every {@link ReelJobProgressBroker#publish}.
+     * Stream closes cleanly once the stage reaches {@code READY} or {@code FAILED},
+     * or after a 3-minute idle timeout.
+     * <p>
+     * GET /v1/media/reel/jobs/{jobId}/stream  (Accept: text/event-stream)
+     */
+    @GetMapping(value = "/reel/jobs/{jobId}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public org.springframework.web.servlet.mvc.method.annotation.SseEmitter reelJobProgressStream(
+            @PathVariable("jobId") String jobId) {
+        long timeoutMs = 3 * 60 * 1000L;
+        org.springframework.web.servlet.mvc.method.annotation.SseEmitter emitter =
+                new org.springframework.web.servlet.mvc.method.annotation.SseEmitter(timeoutMs);
+
+        java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean(false);
+        java.util.concurrent.atomic.AtomicReference<ReelJobProgressBroker.Subscription> subscriptionRef =
+                new java.util.concurrent.atomic.AtomicReference<>();
+
+        Runnable cleanup = () -> {
+            if (closed.compareAndSet(false, true)) {
+                ReelJobProgressBroker.Subscription s = subscriptionRef.getAndSet(null);
+                if (s != null) {
+                    try { s.close(); } catch (Exception ignored) {}
+                }
+            }
+        };
+
+        emitter.onCompletion(cleanup);
+        emitter.onTimeout(() -> { try { emitter.complete(); } catch (Exception ignored) {} cleanup.run(); });
+        emitter.onError(e -> cleanup.run());
+
+        java.util.function.Consumer<ReelJobProgressTracker.Snapshot> publisher = snap -> {
+            if (closed.get() || snap == null) return;
+            try {
+                emitter.send(org.springframework.web.servlet.mvc.method.annotation.SseEmitter.event()
+                        .name("progress")
+                        .data(toStreamResponse(jobId, snap)));
+                if (snap.stage() == ReelJobStage.READY || snap.stage() == ReelJobStage.FAILED) {
+                    emitter.complete();
+                    cleanup.run();
+                }
+            } catch (Exception e) {
+                cleanup.run();
+            }
+        };
+
+        subscriptionRef.set(reelJobProgressBroker.subscribe(jobId, publisher));
+
+        ReelJobProgressTracker.Snapshot current = reelJobProgressTracker.get(jobId);
+        if (current != null) {
+            publisher.accept(current);
+        } else {
+            try {
+                emitter.send(org.springframework.web.servlet.mvc.method.annotation.SseEmitter.event()
+                        .name("progress")
+                        .data(new ReelJobProgressResponse(jobId, "UNKNOWN", 0, null, java.time.Instant.now())));
+            } catch (Exception e) {
+                cleanup.run();
+            }
+        }
+
+        return emitter;
+    }
+
+    private static ReelJobProgressResponse toStreamResponse(String jobId, ReelJobProgressTracker.Snapshot snap) {
+        ReelJobStage stage = snap.stage();
+        int percent = snap.percent() != null ? snap.percent() : percentForStage(stage);
+        return new ReelJobProgressResponse(
+                jobId,
+                stage == null ? "UNKNOWN" : stage.name(),
+                percent,
+                snap.message(),
+                snap.updatedAt() == null ? java.time.Instant.now() : snap.updatedAt()
+        );
     }
 
     /**

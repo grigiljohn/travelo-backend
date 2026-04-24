@@ -1,0 +1,41 @@
+# Example ExternalSecret for media-service. Copy + edit one per service.
+# Data is sourced from AWS Secrets Manager key `/travelo/prod/media-service`
+# which should be a JSON blob with the listed keys.
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: travelo-media-service-secrets
+  namespace: travelo
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: aws-secrets-manager
+    kind: ClusterSecretStore
+  target:
+    name: travelo-media-service-secrets
+    creationPolicy: Owner
+  data:
+    - secretKey: SPRING_DATASOURCE_URL
+      remoteRef: { key: /travelo/prod/media-service, property: SPRING_DATASOURCE_URL }
+    - secretKey: SPRING_DATASOURCE_USERNAME
+      remoteRef: { key: /travelo/prod/media-service, property: SPRING_DATASOURCE_USERNAME }
+    - secretKey: SPRING_DATASOURCE_PASSWORD
+      remoteRef: { key: /travelo/prod/media-service, property: SPRING_DATASOURCE_PASSWORD }
+    - secretKey: SPRING_DATA_REDIS_HOST
+      remoteRef: { key: /travelo/prod/media-service, property: SPRING_DATA_REDIS_HOST }
+    - secretKey: SPRING_DATA_REDIS_PORT
+      remoteRef: { key: /travelo/prod/media-service, property: SPRING_DATA_REDIS_PORT }
+    - secretKey: SPRING_DATA_REDIS_PASSWORD
+      remoteRef: { key: /travelo/prod/media-service, property: SPRING_DATA_REDIS_PASSWORD }
+    - secretKey: KAFKA_BOOTSTRAP_SERVERS
+      remoteRef: { key: /travelo/prod/media-service, property: KAFKA_BOOTSTRAP_SERVERS }
+    - secretKey: MEDIA_S3_BUCKET
+      remoteRef: { key: /travelo/prod/media-service, property: MEDIA_S3_BUCKET }
+    - secretKey: MEDIA_S3_REGION
+      remoteRef: { key: /travelo/prod/media-service, property: MEDIA_S3_REGION }
+    - secretKey: MUSIC_S3_BUCKET
+      remoteRef: { key: /travelo/prod/media-service, property: MUSIC_S3_BUCKET }
+    - secretKey: MEDIA_API_PUBLIC_BASE_URL
+      remoteRef: { key: /travelo/prod/media-service, property: MEDIA_API_PUBLIC_BASE_URL }
+    - secretKey: MEDIA_S3_PUBLIC_OBJECT_BASE_URL
+      remoteRef: { key: /travelo/prod/media-service, property: MEDIA_S3_PUBLIC_OBJECT_BASE_URL }

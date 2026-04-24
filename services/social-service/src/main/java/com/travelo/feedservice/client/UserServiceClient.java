@@ -62,5 +62,34 @@ public class UserServiceClient {
         List<UUID> following = getFollowing(userId);
         return following.contains(targetUserId);
     }
+
+    /**
+     * Get the list of users that follow the given author.
+     * Used by the feed fan-out pipeline on `post.created` events to invalidate /
+     * recompute follower feeds.
+     *
+     * <p>Fail-open: if identity-service hasn't implemented the endpoint yet (or
+     * the call fails), we return an empty list so the caller can gracefully fall
+     * back to lazy recomputation on next feed read.
+     */
+    public List<UUID> getFollowers(UUID authorId) {
+        try {
+            logger.debug("Fetching followers for user {} from user-service", authorId);
+            List<UUID> followers = webClient.get()
+                    .uri("/api/v1/users/{authorId}/followers", authorId)
+                    .retrieve()
+                    .bodyToFlux(UUID.class)
+                    .collectList()
+                    .blockOptional()
+                    .orElseGet(ArrayList::new);
+            logger.debug("Fetched {} followers for user {}", followers.size(), authorId);
+            return followers;
+        } catch (Exception e) {
+            // Expected while identity-service is still wiring up the followers endpoint —
+            // downgrade to debug after roll-out.
+            logger.warn("Error fetching followers for user {}: {}", authorId, e.getMessage());
+            return new ArrayList<>();
+        }
+    }
 }
 

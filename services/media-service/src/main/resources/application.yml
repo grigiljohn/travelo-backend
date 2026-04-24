@@ -159,3 +159,12 @@ music:
     upload-prefix: ${MUSIC_S3_UPLOAD_PREFIX:music}
     thumbnail-prefix: ${MUSIC_S3_THUMBNAIL_PREFIX:music/thumbnails}
     presign-expiry-minutes: ${MUSIC_S3_PRESIGN_EXPIRY_MINUTES:60}
+
+# Reel FFmpeg pipeline: optional comma-separated MP3 URLs to override built-in SoundHelix demo catalog.
+reel:
+  music:
+    override-urls: ${REEL_MUSIC_OVERRIDE_URLS:}
+  progress:
+    # memory = single-node in-memory tracker (default, dev)
+    # redis  = shared tracker on spring.redis.* (production, multi-replica)
+    backend: ${REEL_PROGRESS_BACKEND:memory}

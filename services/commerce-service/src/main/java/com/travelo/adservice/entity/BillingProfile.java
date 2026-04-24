@@ -36,6 +36,9 @@ public class BillingProfile {
     @Column(name = "invoice_profile", columnDefinition = "jsonb")
     private Map<String, Object> invoiceProfile = new HashMap<>();
 
+    @Column(name = "stripe_customer_id", length = 255)
+    private String stripeCustomerId;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;
 
@@ -100,6 +103,14 @@ public class BillingProfile {
 
     public void setInvoiceProfile(Map<String, Object> invoiceProfile) {
         this.invoiceProfile = invoiceProfile;
+    }
+
+    public String getStripeCustomerId() {
+        return stripeCustomerId;
+    }
+
+    public void setStripeCustomerId(String stripeCustomerId) {
+        this.stripeCustomerId = stripeCustomerId;
     }
 
     public OffsetDateTime getCreatedAt() {

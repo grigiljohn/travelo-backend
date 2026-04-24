@@ -1,0 +1,344 @@
+# ---------------------------------------------------------------------------
+# Travelo backend — local Windows Docker Desktop stack.
+#
+# Prereqs: Docker Desktop (WSL2 backend) + >= 10 GB RAM / 6 CPU assigned.
+#
+# Quick start (PowerShell from repo root):
+#   copy .env.example .env
+#   docker compose up -d --build
+#   docker compose logs -f api-gateway social-service media-service
+#
+# The stack matches the EKS topology (same env vars, same ports) so any config
+# that works here will work in the Helm chart after swapping hosts for RDS /
+# ElastiCache / MSK.
+# ---------------------------------------------------------------------------
+
+x-java-defaults: &java-defaults
+  restart: unless-stopped
+  networks: [travelo-net]
+  # Shared JVM tuning; individual services can override JAVA_OPTS in environment below.
+  environment: &java-env
+    TZ: UTC
+    JAVA_OPTS: "-XX:+UseContainerSupport -XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError"
+    SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-docker}
+
+services:
+  # ---------------- infrastructure ----------------
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    # Many Spring services + 3 Hikari pools in social-service share one instance; default
+    # max_connections (100) is easy to hit locally. Recreate the container to apply.
+    command: ["postgres", "-c", "max_connections=200"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-travelo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-travelo}
+      POSTGRES_MULTIPLE_DATABASES: travelo_auth,travelo_posts,travelo_stories,travelo_reels,travelo_media,travelo_messaging,travelo_shops,travelo_ads
+    ports: ["5432:5432"]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./infra/init-multiple-databases.sh:/docker-entrypoint-initdb.d/01-init-databases.sh:ro
+    networks: [travelo-net]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["6379:6379"]
+    volumes: [redis-data:/data]
+    networks: [travelo-net]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks: [travelo-net]
+    restart: unless-stopped
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    depends_on: [zookeeper]
+    ports: ["9092:9092"]
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 24
+    networks: [travelo-net]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 45s
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ports: ["9200:9200"]
+    volumes: [es-data:/usr/share/elasticsearch/data]
+    networks: [travelo-net]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  # ---------------- control-plane ----------------
+  config-server:
+    <<: *java-defaults
+    build:
+      context: .
+      dockerfile: config/config-server/Dockerfile
+    image: travelo/config-server:local
+    ports: ["8888:8888"]
+    environment:
+      <<: *java-env
+      SPRING_PROFILES_ACTIVE: native
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8888/actuator/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+
+  service-registry:
+    <<: *java-defaults
+    build:
+      context: .
+      dockerfile: registry/service-registry/Dockerfile
+    image: travelo/service-registry:local
+    depends_on:
+      config-server: { condition: service_healthy }
+    ports: ["8761:8761"]
+    environment:
+      <<: *java-env
+      SPRING_CONFIG_IMPORT: "optional:configserver:http://config-server:8888"
+
+  # ---------------- application services ----------------
+  api-gateway:
+    <<: *java-defaults
+    build: { context: ., dockerfile: services/api-gateway/Dockerfile }
+    image: travelo/api-gateway:local
+    depends_on:
+      config-server: { condition: service_healthy }
+      service-registry: { condition: service_started }
+    ports: ["8080:8080"]
+    environment:
+      <<: *java-env
+      SPRING_CONFIG_IMPORT: "optional:configserver:http://config-server:8888"
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: "http://service-registry:8761/eureka/"
+      JWT_SECRET: ${JWT_SECRET}
+      IDENTITY_SERVICE_URI: "http://identity-service:8081"
+      SOCIAL_SERVICE_URI: "http://social-service:8096"
+      COMMERCE_SERVICE_URI: "http://commerce-service:8097"
+      DISCOVERY_SERVICE_URI: "http://discovery-service:8088"
+      REALTIME_SERVICE_URI: "http://realtime-service:8098"
+      PLATFORM_SERVICE_URI: "http://platform-service:8099"
+
+  identity-service:
+    <<: *java-defaults
+    build: { context: ., dockerfile: services/identity-service/Dockerfile }
+    image: travelo/identity-service:local
+    depends_on:
+      config-server: { condition: service_healthy }
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    ports: ["8081:8081"]
+    environment:
+      <<: *java-env
+      SPRING_CONFIG_IMPORT: "optional:configserver:http://config-server:8888"
+      POSTGRES_URL: "jdbc:postgresql://postgres:5432/travelo_auth"
+      POSTGRES_USERNAME: ${POSTGRES_USER:-travelo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-travelo}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      JWT_SECRET: ${JWT_SECRET}
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: "http://service-registry:8761/eureka/"
+
+  social-service:
+    <<: *java-defaults
+    build: { context: ., dockerfile: services/social-service/Dockerfile }
+    image: travelo/social-service:local
+    depends_on:
+      config-server: { condition: service_healthy }
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+      media-service: { condition: service_started }
+    ports: ["8096:8096"]
+    environment:
+      <<: *java-env
+      SPRING_CONFIG_IMPORT: "optional:configserver:http://config-server:8888"
+      POSTGRES_URL: "jdbc:postgresql://postgres:5432/travelo_posts"
+      STORY_DATASOURCE_URL: "jdbc:postgresql://postgres:5432/travelo_stories"
+      REEL_DATASOURCE_URL: "jdbc:postgresql://postgres:5432/travelo_reels"
+      POSTGRES_USERNAME: ${POSTGRES_USER:-travelo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-travelo}
+      STORY_DATASOURCE_USERNAME: ${POSTGRES_USER:-travelo}
+      STORY_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-travelo}
+      REEL_DATASOURCE_USERNAME: ${POSTGRES_USER:-travelo}
+      REEL_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-travelo}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:29092"
+      MEDIA_SERVICE_URL: "http://media-service:8084"
+      USER_SERVICE_URL: "http://identity-service:8081"
+      JWT_SECRET: ${JWT_SECRET}
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: "http://service-registry:8761/eureka/"
+
+  media-service:
+    <<: *java-defaults
+    build: { context: ., dockerfile: services/media-service/Dockerfile }
+    image: travelo/media-service:local
+    depends_on:
+      config-server: { condition: service_healthy }
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+    ports: ["8084:8084"]
+    environment:
+      <<: *java-env
+      SPRING_CONFIG_IMPORT: "optional:configserver:http://config-server:8888"
+      SPRING_DATASOURCE_URL: "jdbc:postgresql://postgres:5432/travelo_media"
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-travelo}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-travelo}
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:29092"
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      REEL_PROGRESS_BACKEND: "redis"
+      MEDIA_S3_ENABLED: ${MEDIA_S3_ENABLED:-false}
+      MEDIA_S3_BUCKET: ${MEDIA_S3_BUCKET:-travelo-media-local}
+      MEDIA_S3_REGION: ${MEDIA_S3_REGION:-ap-southeast-2}
+      MEDIA_STORAGE_PATH: /app/uploads
+      MEDIA_STORAGE_BASE_URL: "http://localhost:8084"
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: "http://service-registry:8761/eureka/"
+    volumes:
+      - media-uploads:/app/uploads
+
+  discovery-service:
+    <<: *java-defaults
+    build: { context: ., dockerfile: services/discovery-service/Dockerfile }
+    image: travelo/discovery-service:local
+    depends_on:
+      config-server: { condition: service_healthy }
+      elasticsearch: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+    ports: ["8088:8088"]
+    environment:
+      <<: *java-env
+      SPRING_CONFIG_IMPORT: "optional:configserver:http://config-server:8888"
+      ELASTICSEARCH_URIS: "http://elasticsearch:9200"
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:29092"
+      USER_SERVICE_URL: "http://identity-service:8081"
+      POST_SERVICE_URL: "http://social-service:8096"
+      SHOP_SERVICE_URL: "http://commerce-service:8097"
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: "http://service-registry:8761/eureka/"
+      GOOGLE_PLACES_API_KEY: ${GOOGLE_PLACES_API_KEY:-}
+
+  realtime-service:
+    <<: *java-defaults
+    build: { context: ., dockerfile: services/realtime-service/Dockerfile }
+    image: travelo/realtime-service:local
+    depends_on:
+      config-server: { condition: service_healthy }
+      postgres: { condition: service_healthy }
+      kafka: { condition: service_healthy }
+    ports: ["8098:8098"]
+    environment:
+      <<: *java-env
+      SPRING_CONFIG_IMPORT: "optional:configserver:http://config-server:8888"
+      MESSAGING_POSTGRES_HOST: postgres
+      MESSAGING_POSTGRES_DB: travelo_messaging
+      MESSAGING_POSTGRES_USER: ${POSTGRES_USER:-travelo}
+      MESSAGING_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-travelo}
+      NOTIFICATION_POSTGRES_HOST: postgres
+      NOTIFICATION_POSTGRES_DB: travelo_messaging
+      NOTIFICATION_POSTGRES_USER: ${POSTGRES_USER:-travelo}
+      NOTIFICATION_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-travelo}
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:29092"
+      JWT_SECRET: ${JWT_SECRET}
+      USER_SERVICE_URL: "http://identity-service:8081"
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: "http://service-registry:8761/eureka/"
+
+  commerce-service:
+    <<: *java-defaults
+    build: { context: ., dockerfile: services/commerce-service/Dockerfile }
+    image: travelo/commerce-service:local
+    depends_on:
+      config-server: { condition: service_healthy }
+      postgres: { condition: service_healthy }
+      media-service: { condition: service_started }
+    ports: ["8097:8097"]
+    environment:
+      <<: *java-env
+      SPRING_CONFIG_IMPORT: "optional:configserver:http://config-server:8888"
+      SHOP_POSTGRES_URL: "jdbc:postgresql://postgres:5432/travelo_shops"
+      AD_POSTGRES_URL: "jdbc:postgresql://postgres:5432/travelo_ads"
+      SHOP_POSTGRES_USERNAME: ${POSTGRES_USER:-travelo}
+      SHOP_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-travelo}
+      AD_POSTGRES_USERNAME: ${POSTGRES_USER:-travelo}
+      AD_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-travelo}
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:29092"
+      MEDIA_SERVICE_URL: "http://media-service:8084"
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: "http://service-registry:8761/eureka/"
+
+  platform-service:
+    <<: *java-defaults
+    build: { context: ., dockerfile: services/platform-service/Dockerfile }
+    image: travelo/platform-service:local
+    depends_on:
+      config-server: { condition: service_healthy }
+    ports: ["8099:8099"]
+    environment:
+      <<: *java-env
+      SPRING_CONFIG_IMPORT: "optional:configserver:http://config-server:8888"
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: "http://service-registry:8761/eureka/"
+
+  # ---------------- ops ----------------
+  pgadmin:
+    image: dpage/pgadmin4:8.5
+    profiles: ["tools"]
+    restart: unless-stopped
+    depends_on: [postgres]
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@travelo.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    ports: ["5050:80"]
+    volumes: [pgadmin-data:/var/lib/pgadmin]
+    networks: [travelo-net]
+
+networks:
+  travelo-net:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
+  es-data:
+  pgadmin-data:
+  media-uploads:

@@ -1,0 +1,3 @@
+ALTER TABLE reels
+    ADD COLUMN IF NOT EXISTS filter_type VARCHAR(32),
+    ADD COLUMN IF NOT EXISTS music_enabled BOOLEAN;

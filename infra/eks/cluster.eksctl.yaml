@@ -1,0 +1,113 @@
+#
+# eksctl cluster config for the Travelo backend.
+#
+# Apply once, up front:
+#   eksctl create cluster -f infra/eks/cluster.eksctl.yaml
+#
+# Replace REPLACE_ME_ACCOUNT_ID with your AWS account id before applying.
+#
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: travelo-prod
+  region: ap-southeast-2
+  version: "1.29"
+  tags:
+    Project: travelo
+    Environment: production
+    ManagedBy: eksctl
+
+# Dedicated VPC + two public / two private subnets across 2 AZs.
+# For production, swap this for `vpc.id` pointing at an existing VPC.
+vpc:
+  autoAllocateIPv6: false
+  cidr: "10.70.0.0/16"
+  clusterEndpoints:
+    publicAccess: true
+    privateAccess: true
+
+iam:
+  withOIDC: true
+  serviceAccounts:
+    # Pre-provisioned IRSA bindings — the Helm chart just references the SA annotation.
+    - metadata:
+        name: travelo-media-service
+        namespace: travelo
+      roleName: travelo-media-service
+      attachPolicyARNs:
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/AmazonRekognitionReadOnlyAccess
+      roleOnly: false
+
+    - metadata:
+        name: aws-load-balancer-controller
+        namespace: kube-system
+      wellKnownPolicies:
+        awsLoadBalancerController: true
+
+    - metadata:
+        name: cluster-autoscaler
+        namespace: kube-system
+      wellKnownPolicies:
+        autoScaler: true
+
+    - metadata:
+        name: external-secrets
+        namespace: external-secrets
+      attachPolicyARNs:
+        - arn:aws:iam::aws:policy/SecretsManagerReadWrite
+
+addons:
+  - name: vpc-cni
+    version: latest
+    attachPolicyARNs:
+      - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+  - name: coredns
+    version: latest
+  - name: kube-proxy
+    version: latest
+  - name: aws-ebs-csi-driver
+    version: latest
+    wellKnownPolicies:
+      ebsCSIController: true
+
+managedNodeGroups:
+  # Default pool: general-purpose workloads.
+  - name: ng-default
+    instanceTypes: ["t3.large"]
+    minSize: 2
+    maxSize: 6
+    desiredCapacity: 3
+    volumeSize: 60
+    volumeType: gp3
+    privateNetworking: true
+    labels:
+      workload: general
+    tags:
+      k8s.io/cluster-autoscaler/enabled: "true"
+      k8s.io/cluster-autoscaler/travelo-prod: "owned"
+
+  # Backend pool: bigger instances for FFmpeg + Spring heap.
+  - name: ng-backend
+    instanceTypes: ["m6i.xlarge", "m5.xlarge"]
+    minSize: 2
+    maxSize: 10
+    desiredCapacity: 3
+    volumeSize: 80
+    volumeType: gp3
+    privateNetworking: true
+    labels:
+      workload: backend
+    taints:
+      - key: workload
+        value: backend
+        effect: NoSchedule
+    tags:
+      k8s.io/cluster-autoscaler/enabled: "true"
+      k8s.io/cluster-autoscaler/travelo-prod: "owned"
+
+cloudWatch:
+  clusterLogging:
+    enableTypes: ["api", "audit", "authenticator", "controllerManager", "scheduler"]
+    logRetentionInDays: 30

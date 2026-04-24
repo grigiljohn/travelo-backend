@@ -10,10 +10,16 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.travelo.reelservice.client.ReelMediaPipelineClient;
+import com.travelo.reelservice.client.dto.ReelProcessMediaResponse;
+
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -34,15 +40,21 @@ public class ReelController {
     private final ReelIngestionService reelIngestionService;
     private final ReelLikeService reelLikeService;
     private final ReelCommentService reelCommentService;
+    private final ReelViewService reelViewService;
+    private final ReelMediaPipelineClient reelMediaPipelineClient;
 
     public ReelController(ReelService reelService,
                          ReelIngestionService reelIngestionService,
                          ReelLikeService reelLikeService,
-                         ReelCommentService reelCommentService) {
+                         ReelCommentService reelCommentService,
+                         ReelViewService reelViewService,
+                         ReelMediaPipelineClient reelMediaPipelineClient) {
         this.reelService = reelService;
         this.reelIngestionService = reelIngestionService;
         this.reelLikeService = reelLikeService;
         this.reelCommentService = reelCommentService;
+        this.reelViewService = reelViewService;
+        this.reelMediaPipelineClient = reelMediaPipelineClient;
     }
 
     @PostMapping("/ingest")
@@ -60,6 +72,58 @@ public class ReelController {
         logger.info("POST /api/v1/reels/ingest - userId={}", userId);
         ReelDto reel = reelIngestionService.createReel(userId, request);
         return ResponseEntity.status(HttpStatus.CREATED).body(reel);
+    }
+
+    /**
+     * Upload raw reel video: media-service applies trim, filter, 9:16, optional music; reel row is created READY.
+     */
+    @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(summary = "Upload & process reel", description = "Multipart reel upload with filterType and musicEnabled")
+    public ResponseEntity<ReelDto> uploadReel(
+            @Parameter(description = "User ID (optional when JWT is present)")
+            @RequestParam(value = "userId", required = false) String userIdParam,
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "filter_type", defaultValue = "NONE") String filterType,
+            @RequestParam(value = "music_enabled", defaultValue = "true") boolean musicEnabled,
+            @RequestParam(value = "caption", required = false) String caption,
+            @RequestParam(value = "location", required = false) String location,
+            @RequestParam(value = "client_job_id", required = false) String clientJobId) {
+        String userId = (userIdParam != null && !userIdParam.isBlank())
+                ? userIdParam
+                : SecurityUtils.getCurrentUserIdAsString();
+        if (userId == null || userId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "User not authenticated");
+        }
+        UUID ownerId = parseOwnerUuid(userId);
+        logger.info("POST /api/v1/reels/upload userId={} filter={} musicEnabled={} jobId={}",
+                userId, filterType, musicEnabled, clientJobId);
+        try {
+            ReelProcessMediaResponse processed = reelMediaPipelineClient.processReel(
+                    file, ownerId, filterType, musicEnabled, clientJobId);
+            ReelDto reel = reelIngestionService.ingestProcessedDelivery(
+                    userId,
+                    processed.mediaId(),
+                    processed.downloadUrl(),
+                    processed.thumbnailUrl(),
+                    processed.durationSeconds(),
+                    caption,
+                    location,
+                    filterType,
+                    musicEnabled
+            );
+            return ResponseEntity.status(HttpStatus.CREATED).body(reel);
+        } catch (Exception e) {
+            logger.error("reel upload failed: {}", e.getMessage(), e);
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Reel upload failed: " + e.getMessage());
+        }
+    }
+
+    private static UUID parseOwnerUuid(String userId) {
+        try {
+            return UUID.fromString(userId);
+        } catch (Exception e) {
+            return UUID.nameUUIDFromBytes(userId.getBytes(StandardCharsets.UTF_8));
+        }
     }
 
     @GetMapping
@@ -141,11 +205,22 @@ public class ReelController {
     @Operation(summary = "Track view", description = "Track a reel view with analytics")
     public ResponseEntity<Void> trackView(
             @Parameter(description = "Reel ID") @PathVariable("reelId") UUID reelId,
-            @Parameter(description = "User ID", required = true) @RequestParam String userId,
-            @RequestBody TrackReelViewRequest request) {
-        logger.info("POST /api/v1/reels/{}/view - userId={}", reelId, userId);
-        // TODO: Implement view tracking service
-        return ResponseEntity.ok().build();
+            @Parameter(description = "User ID (optional when JWT is present)")
+            @RequestParam(value = "userId", required = false) String userIdParam,
+            @RequestBody(required = false) TrackReelViewRequest request) {
+        String userId = (userIdParam != null && !userIdParam.isBlank())
+                ? userIdParam
+                : SecurityUtils.getCurrentUserIdAsString();
+        if (userId == null || userId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "User not authenticated");
+        }
+        Integer duration = request != null ? request.getViewDurationSeconds() : null;
+        Double completion = request != null ? request.getCompletionPercentage() : null;
+        logger.debug("POST /api/v1/reels/{}/view userId={} duration={}s completion={}",
+                reelId, userId, duration, completion);
+        reelViewService.recordView(reelId, userId, duration, completion);
+        // Analytics ping — always 202 Accepted, never 5xx to the client.
+        return ResponseEntity.accepted().build();
     }
 }
 

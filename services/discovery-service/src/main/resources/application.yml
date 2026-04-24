@@ -6,17 +6,13 @@ spring:
     name: discovery-service
   config:
     import: optional:configserver:http://localhost:8888
-  # Search / reindex APIs need Elasticsearch reachable at this URI when those endpoints run.
-  # Example: docker run --rm -p 9200:9200 -e "discovery.type=single-node" docker.elastic.co/elasticsearch/elasticsearch:8.12.1
+  # Search / reindex APIs need Elasticsearch at startup: repository beans connect during context refresh.
+  # From repo root: docker compose up -d elasticsearch   (see docker-compose.yml service "elasticsearch")
+  # Or one-off: docker run --rm -p 9200:9200 -e discovery.type=single-node -e xpack.security.enabled=false docker.elastic.co/elasticsearch/elasticsearch:8.11.0
   elasticsearch:
     uris: ${ELASTICSEARCH_URIS:http://localhost:9200}
     username: ${ELASTICSEARCH_USERNAME:}
     password: ${ELASTICSEARCH_PASSWORD:}
-  data:
-    elasticsearch:
-      repositories:
-        # Defers repository bean init where supported; @Lazy on repository injections also avoids ES at startup.
-        bootstrap-mode: lazy
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     consumer:
@@ -37,6 +33,11 @@ eureka:
     prefer-ip-address: true
 
 app:
+  # Google Places (legacy REST) — set GOOGLE_PLACES_API_KEY for live search / tagging / map pins.
+  google:
+    places:
+      api-key: ${GOOGLE_PLACES_API_KEY:AIzaSyA8zvzKo6AcNgJJO-aMTVOa0c6OjKyvwFA}
+
   post-service:
     url: ${POST_SERVICE_URL:http://localhost:8096}
   user-service:
@@ -47,6 +48,41 @@ app:
     url: ${AUTH_DB_URL:jdbc:postgresql://localhost:5432/travelo_auth}
     username: ${AUTH_DB_USERNAME:travelo}
     password: ${AUTH_DB_PASSWORD:travelo}
+
+  # Curated collections surfaced on the Explore tab. These are editor-
+  # maintained "saved searches" — a set of keywords that drive the
+  # detail-view search query. Edit freely; no DB migration required.
+  curated-collections:
+    items:
+      - id: weekend-getaways
+        title: Best weekend getaways
+        subtitle: Short escapes under 48 hours
+        coverImageUrl: https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=1200
+        tag: Editor's pick
+        keywords: [weekend, getaway, beach, short-trip]
+      - id: solo-travel
+        title: Solo travel stories
+        subtitle: One-person itineraries that actually work
+        coverImageUrl: https://images.unsplash.com/photo-1527631746610-bca00a040d60?w=1200
+        tag: Community
+        keywords: [solo, backpack, itinerary, slow-travel]
+      - id: mountain-escapes
+        title: Mountain escapes
+        subtitle: Alpine views, cabins, and crisp air
+        coverImageUrl: https://images.unsplash.com/photo-1464822759023-fed622ff2c3b?w=1200
+        tag: Seasonal
+        keywords: [mountain, alps, hiking, cabin, winter]
+      - id: food-trails
+        title: Food trails
+        subtitle: Eating your way through a city
+        coverImageUrl: https://images.unsplash.com/photo-1504674900247-0877df9cc836?w=1200
+        keywords: [food, restaurant, street-food, cafe, dining]
+      - id: hidden-gems
+        title: Hidden gems
+        subtitle: Places most travelers miss
+        coverImageUrl: https://images.unsplash.com/photo-1488646953014-85cb44e25828?w=1200
+        tag: Off-the-grid
+        keywords: [hidden, underrated, off-the-beaten-path, local]
 
 # Resilience4j Circuit Breaker Configuration
 resilience4j:

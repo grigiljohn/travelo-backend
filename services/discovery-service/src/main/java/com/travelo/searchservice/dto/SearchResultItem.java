@@ -3,6 +3,7 @@ package com.travelo.searchservice.dto;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.travelo.searchservice.document.*;
 
+import java.util.HashMap;
 import java.util.Map;
 
 /**
@@ -78,6 +79,39 @@ public class SearchResultItem {
                 "country", location.getCountry() != null ? location.getCountry() : "",
                 "postCount", location.getPostCount() != null ? location.getPostCount() : 0
         ));
+        return item;
+    }
+
+    /**
+     * Google Places hit — includes lat/lng in metadata for map pins (mobile reads {@code lat}/{@code lng}).
+     */
+    public static SearchResultItem fromGooglePlace(
+            String placeId,
+            String title,
+            String subtitle,
+            double lat,
+            double lng,
+            String formattedAddress) {
+        SearchResultItem item = new SearchResultItem();
+        item.setType("location");
+        item.setId(placeId);
+        item.setTitle(title != null ? title : "");
+        String sub = subtitle != null && !subtitle.isBlank()
+                ? subtitle
+                : (formattedAddress != null ? formattedAddress : "");
+        item.setSubtitle(sub);
+        Map<String, Object> md = new HashMap<>();
+        md.put("city", "");
+        md.put("country", "");
+        md.put("postCount", 0);
+        md.put("lat", lat);
+        md.put("lng", lng);
+        md.put("latitude", lat);
+        md.put("longitude", lng);
+        md.put("location", formattedAddress != null && !formattedAddress.isBlank() ? formattedAddress : title);
+        md.put("source", "google_places");
+        item.setMetadata(md);
+        item.setRelevanceScore(100.0);
         return item;
     }
 

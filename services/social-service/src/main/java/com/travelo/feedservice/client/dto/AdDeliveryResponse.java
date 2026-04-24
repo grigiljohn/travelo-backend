@@ -26,6 +26,10 @@ public record AdDeliveryResponse(
         String displayUrl,
         String brandName,
         String brandWebsite,
+
+        UUID shopId,
+        UUID productId,
+        String shopUrl,
         
         // Metadata
         Map<String, Object> metadata

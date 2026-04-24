@@ -1,0 +1,58 @@
+# =============================================================================
+# Shared AWS-prod defaults. `helm install ... -f values-shared-aws.yaml -f values-<svc>.yaml`.
+# Overrides values.yaml for any production cluster that uses:
+#   - RDS Postgres, ElastiCache Redis, MSK Kafka, OpenSearch
+#   - External Secrets Operator (service-specific secrets live in AWS Secrets Mgr)
+#   - AWS Load Balancer Controller (ingress class `alb`)
+#   - kube-prometheus-stack (ServiceMonitor CRD available)
+# =============================================================================
+
+image:
+  repository: "REPLACE_ME.dkr.ecr.ap-southeast-2.amazonaws.com/travelo"
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+environment: production
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 8
+  targetCPUUtilizationPercentage: 70
+
+resources:
+  limits:   { cpu: 1000m, memory: 1Gi }
+  requests: { cpu: 250m,  memory: 512Mi }
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/path: "/actuator/prometheus"
+  prometheus.io/port: "8080"
+
+serviceMonitor:
+  enabled: true
+
+# Placement: stick to a dedicated node group for backend workloads.
+nodeSelector:
+  workload: backend
+tolerations:
+  - key: workload
+    operator: Equal
+    value: backend
+    effect: NoSchedule
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values: [travelo-backend]
+          topologyKey: topology.kubernetes.io/zone
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1

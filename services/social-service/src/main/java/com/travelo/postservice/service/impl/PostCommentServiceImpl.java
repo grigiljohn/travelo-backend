@@ -1,10 +1,16 @@
 package com.travelo.postservice.service.impl;
 
+import com.travelo.postservice.client.UserServiceClient;
+import com.travelo.postservice.client.dto.UserDto;
 import com.travelo.postservice.dto.PostCommentDto;
 import com.travelo.postservice.dto.CreatePostCommentRequest;
+import com.travelo.postservice.dto.events.CommentCreatedEvent;
 import com.travelo.postservice.entity.Post;
 import com.travelo.postservice.entity.PostComment;
+import com.travelo.postservice.event.PostEventPublisher;
 import com.travelo.postservice.exception.PostNotFoundException;
+import com.travelo.postservice.realtime.CommentStreamBroker;
+import com.travelo.postservice.realtime.CommentStreamEvent;
 import com.travelo.postservice.repository.PostRepository;
 import com.travelo.postservice.repository.PostCommentRepository;
 import com.travelo.postservice.service.PostCommentService;
@@ -18,11 +24,12 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
-import org.springframework.data.domain.PageImpl;
 
 @Service
 @Transactional
@@ -32,14 +39,62 @@ public class PostCommentServiceImpl implements PostCommentService {
 
     private final PostRepository postRepository;
     private final PostCommentRepository postCommentRepository;
+    private final PostEventPublisher postEventPublisher;
+    private final UserServiceClient userServiceClient;
+    private final CommentStreamBroker commentStreamBroker;
     // TODO: Add CommentLikeRepository for tracking individual comment likes
 
     public PostCommentServiceImpl(
             PostRepository postRepository,
-            PostCommentRepository postCommentRepository) {
+            PostCommentRepository postCommentRepository,
+            PostEventPublisher postEventPublisher,
+            UserServiceClient userServiceClient,
+            CommentStreamBroker commentStreamBroker) {
         this.postRepository = postRepository;
         this.postCommentRepository = postCommentRepository;
+        this.postEventPublisher = postEventPublisher;
+        this.userServiceClient = userServiceClient;
+        this.commentStreamBroker = commentStreamBroker;
         logger.info("PostCommentServiceImpl initialized");
+    }
+
+    /**
+     * Resolve (username, avatarUrl) for every distinct comment author in a single
+     * sweep so a page of comments costs at most N user-service round-trips
+     * (N = distinct authors). Failures are swallowed — caller just sees nulls
+     * and the mobile client renders a generic "User" affordance.
+     */
+    private Map<String, UserLite> resolveAuthors(Set<String> userIds) {
+        Map<String, UserLite> out = new HashMap<>();
+        if (userIds == null || userIds.isEmpty() || userServiceClient == null) {
+            return out;
+        }
+        for (String uid : userIds) {
+            if (uid == null || uid.isBlank()) continue;
+            try {
+                UserDto u = userServiceClient.getUser(UUID.fromString(uid));
+                if (u != null) {
+                    out.put(uid, new UserLite(u.getUsername(), u.getProfilePictureUrl()));
+                }
+            } catch (Exception ex) {
+                logger.debug("comment author lookup failed for {}: {}", uid, ex.toString());
+            }
+        }
+        return out;
+    }
+
+    private record UserLite(String username, String avatarUrl) {}
+
+    private PostCommentDto toDto(PostComment comment, List<PostCommentDto> replies,
+                                 boolean isLiked, Map<String, UserLite> authors) {
+        UserLite u = authors.get(comment.getUserId());
+        return PostCommentDto.fromEntity(
+                comment,
+                replies,
+                isLiked,
+                u != null ? u.username() : null,
+                u != null ? u.avatarUrl() : null
+        );
     }
 
     @Override
@@ -62,11 +117,60 @@ public class PostCommentServiceImpl implements PostCommentService {
         post.setComments(post.getComments() + 1);
         postRepository.save(post);
 
-        // TODO: Send notification to post owner
-        // TODO: Track analytics event
+        // Emit comment.created for realtime-service (notification to post owner) + analytics.
+        try {
+            postEventPublisher.publishCommentCreated(CommentCreatedEvent.of(
+                    comment.getId(),
+                    postId,
+                    post.getUserId(),
+                    userId,
+                    request.parentId(),
+                    request.commentText()
+            ));
+        } catch (Exception ex) {
+            logger.warn("Failed to emit comment.created event for commentId={}: {}", comment.getId(), ex.toString());
+        }
 
         logger.info("User {} commented on post {}", userId, postId);
-        return PostCommentDto.fromEntity(comment);
+        Map<String, UserLite> authors = resolveAuthors(Set.of(userId));
+        PostCommentDto dto = toDto(comment, List.of(), false, authors);
+
+        // Fan out to SSE subscribers *after* the JPA tx commits so that no
+        // subscriber ever sees a comment that eventually rolls back. The
+        // broker itself never throws into this thread, but we still guard
+        // the registration to keep the comment write path bullet-proof.
+        try {
+            final String finalPostId = postId;
+            final PostCommentDto finalDto = dto;
+            org.springframework.transaction.support.TransactionSynchronizationManager
+                    .registerSynchronization(new org.springframework.transaction.support
+                            .TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            commentStreamBroker.publish(finalPostId, toStreamEvent(finalDto));
+                        }
+                    });
+        } catch (IllegalStateException noTx) {
+            // No active synchronization (e.g. called outside @Transactional in a test) —
+            // publish directly; worst case the caller sees an event for a row that
+            // immediately fails, which a well-behaved SSE client just ignores on refresh.
+            commentStreamBroker.publish(postId, toStreamEvent(dto));
+        }
+
+        return dto;
+    }
+
+    private static CommentStreamEvent toStreamEvent(PostCommentDto dto) {
+        return new CommentStreamEvent(
+                dto.id() == null ? null : dto.id().toString(),
+                dto.postId(),
+                dto.userId(),
+                dto.commentText(),
+                dto.parentId() == null ? null : dto.parentId().toString(),
+                dto.username(),
+                dto.avatarUrl(),
+                dto.createdAt()
+        );
     }
 
     @Override
@@ -74,104 +178,50 @@ public class PostCommentServiceImpl implements PostCommentService {
     public Page<PostCommentDto> getComments(String postId, int page, int limit, String currentUserId) {
         Pageable pageable = PageRequest.of(page - 1, limit);
         Page<PostComment> comments = postCommentRepository.findTopLevelCommentsByPostId(postId, pageable);
-        
-        // If no comments found, return mock data for development
-        if (comments.isEmpty() && page == 1) {
-            logger.info("No comments found for post {}, returning mock data", postId);
-            return getMockComments(postId, pageable);
+
+        // Gather every distinct author (top-level + first 3 replies) in one pass so
+        // resolveAuthors can issue at most one user-service call per unique id.
+        Map<String, List<PostComment>> repliesByParent = new HashMap<>();
+        Set<String> authorIds = new LinkedHashSet<>();
+        for (PostComment c : comments.getContent()) {
+            authorIds.add(c.getUserId());
+            List<PostComment> replies = postCommentRepository.findRepliesByParentId(c.getId());
+            repliesByParent.put(c.getId().toString(), replies);
+            for (PostComment r : replies) authorIds.add(r.getUserId());
         }
-        
-        // Load replies for each comment (could be optimized with batch loading)
+        Map<String, UserLite> authors = resolveAuthors(authorIds);
+
         return comments.map(comment -> {
-            List<PostComment> replies = postCommentRepository.findRepliesByParentId(comment.getId());
+            List<PostComment> replies = repliesByParent.getOrDefault(comment.getId().toString(), List.of());
             List<PostCommentDto> replyDtos = replies.stream()
-                    .map(reply -> PostCommentDto.fromEntity(reply, null, false)) // TODO: Check if liked
-                    .limit(3) // Limit replies preview
+                    .limit(3)
+                    .map(reply -> toDto(reply, List.of(), false, authors))
                     .collect(Collectors.toList());
-            return PostCommentDto.fromEntity(comment, replyDtos, false); // TODO: Check if liked
+            return toDto(comment, replyDtos, false, authors);
         });
-    }
-    
-    /**
-     * Return mock comments when database is empty.
-     * This provides fallback data for development.
-     */
-    private Page<PostCommentDto> getMockComments(String postId, Pageable pageable) {
-        List<PostCommentDto> mockComments = List.of(
-            new PostCommentDto(
-                UUID.randomUUID(),
-                postId,
-                "user-1",
-                "Amazing photo! 😍",
-                null,
-                12,
-                OffsetDateTime.now().minusHours(2),
-                OffsetDateTime.now().minusHours(2),
-                List.of(),
-                false,
-                "jane_doe",
-                "https://i.pravatar.cc/150?img=1"
-            ),
-            new PostCommentDto(
-                UUID.randomUUID(),
-                postId,
-                "user-2",
-                "Where is this taken? Looks incredible!",
-                null,
-                8,
-                OffsetDateTime.now().minusHours(5),
-                OffsetDateTime.now().minusHours(5),
-                List.of(),
-                true,
-                "travel_lover",
-                "https://i.pravatar.cc/150?img=2"
-            ),
-            new PostCommentDto(
-                UUID.randomUUID(),
-                postId,
-                "user-3",
-                "The lighting is perfect! Great shot 📸",
-                null,
-                15,
-                OffsetDateTime.now().minusHours(8),
-                OffsetDateTime.now().minusHours(8),
-                List.of(),
-                false,
-                "photography_enthusiast",
-                "https://i.pravatar.cc/150?img=3"
-            )
-        );
-        
-        int start = (int) pageable.getOffset();
-        int end = Math.min((start + pageable.getPageSize()), mockComments.size());
-        List<PostCommentDto> pagedComments = mockComments.subList(start, end);
-        
-        return new org.springframework.data.domain.PageImpl<>(
-            pagedComments,
-            pageable,
-            mockComments.size()
-        );
     }
 
     @Override
     @Transactional(readOnly = true)
     public Page<PostCommentDto> getCommentReplies(UUID commentId, int page, int limit, String currentUserId) {
-        PostComment parentComment = postCommentRepository.findByIdAndNotDeleted(commentId)
+        postCommentRepository.findByIdAndNotDeleted(commentId)
                 .orElseThrow(() -> new IllegalArgumentException("Comment not found"));
 
         Pageable pageable = PageRequest.of(page - 1, limit);
         List<PostComment> replies = postCommentRepository.findRepliesByParentId(commentId);
-        
-        // Convert to DTOs
+
+        Set<String> authorIds = replies.stream().map(PostComment::getUserId)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        Map<String, UserLite> authors = resolveAuthors(authorIds);
+
         List<PostCommentDto> replyDtos = replies.stream()
-                .map(reply -> PostCommentDto.fromEntity(reply, null, false))
+                .map(reply -> toDto(reply, List.of(), false, authors))
                 .collect(Collectors.toList());
 
-        // Create a page from the list
         int start = (int) pageable.getOffset();
         int end = Math.min((start + pageable.getPageSize()), replyDtos.size());
         List<PostCommentDto> pagedReplies = replyDtos.subList(start, end);
-        
+
         return new org.springframework.data.domain.PageImpl<>(
                 pagedReplies,
                 pageable,
@@ -193,7 +243,7 @@ public class PostCommentServiceImpl implements PostCommentService {
         comment = postCommentRepository.save(comment);
 
         logger.info("Comment {} updated by user {}", commentId, userId);
-        return PostCommentDto.fromEntity(comment);
+        return toDto(comment, List.of(), false, resolveAuthors(Set.of(comment.getUserId())));
     }
 
     @Override
@@ -237,7 +287,7 @@ public class PostCommentServiceImpl implements PostCommentService {
         comment = postCommentRepository.save(comment);
 
         logger.info("Comment {} {} by user {}", commentId, liked ? "liked" : "unliked", userId);
-        return PostCommentDto.fromEntity(comment, null, liked);
+        return toDto(comment, List.of(), liked, resolveAuthors(Set.of(comment.getUserId())));
     }
 
     @Override
@@ -247,11 +297,17 @@ public class PostCommentServiceImpl implements PostCommentService {
                 .orElseThrow(() -> new IllegalArgumentException("Comment not found"));
 
         List<PostComment> replies = postCommentRepository.findRepliesByParentId(commentId);
+
+        Set<String> authorIds = new LinkedHashSet<>();
+        authorIds.add(comment.getUserId());
+        for (PostComment r : replies) authorIds.add(r.getUserId());
+        Map<String, UserLite> authors = resolveAuthors(authorIds);
+
         List<PostCommentDto> replyDtos = replies.stream()
-                .map(reply -> PostCommentDto.fromEntity(reply, null, false))
+                .map(reply -> toDto(reply, List.of(), false, authors))
                 .collect(Collectors.toList());
 
-        return PostCommentDto.fromEntity(comment, replyDtos, false); // TODO: Check if liked
+        return toDto(comment, replyDtos, false, authors); // TODO: Check if liked
     }
 }
 

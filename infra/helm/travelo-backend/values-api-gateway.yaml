@@ -1,0 +1,50 @@
+service:
+  name: api-gateway
+  port: 8080
+  type: ClusterIP
+
+# Public ingress lives on the api-gateway only. ACM cert ARN required.
+ingress:
+  enabled: true
+  className: alb
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/healthcheck-path: /actuator/health/liveness
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: "15"
+    # Replace with your ACM cert ARN
+    alb.ingress.kubernetes.io/certificate-arn: "REPLACE_ME_ACM_CERT_ARN"
+    alb.ingress.kubernetes.io/group.name: travelo-public
+  hosts:
+    - host: api.travelo.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+
+extraEnv:
+  - name: SPRING_CLOUD_GATEWAY_DISCOVERY_LOCATOR_ENABLED
+    value: "false"
+  - name: IDENTITY_SERVICE_URI
+    value: "http://travelo-identity-service:8081"
+  - name: SOCIAL_SERVICE_URI
+    value: "http://travelo-social-service:8096"
+  - name: MEDIA_SERVICE_URI
+    value: "http://travelo-media-service:8084"
+  - name: COMMERCE_SERVICE_URI
+    value: "http://travelo-commerce-service:8097"
+  - name: DISCOVERY_SERVICE_URI
+    value: "http://travelo-discovery-service:8088"
+  - name: REALTIME_SERVICE_URI
+    value: "http://travelo-realtime-service:8098"
+  - name: PLATFORM_SERVICE_URI
+    value: "http://travelo-platform-service:8099"
+  - name: EUREKA_CLIENT_ENABLED
+    value: "false"
+
+# JWT secret lives in AWS Secrets Manager via External Secrets Operator:
+#   k apply -f infra/eks/externalsecret-api-gateway.yaml
+envFrom:
+  - secretRef:
+      name: travelo-api-gateway-secrets

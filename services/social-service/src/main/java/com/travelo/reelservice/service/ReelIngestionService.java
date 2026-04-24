@@ -14,6 +14,19 @@ public interface ReelIngestionService {
      * Triggers transcoding pipeline via Kafka event.
      */
     ReelDto createReel(String userId, CreateReelRequest request);
+
+    /**
+     * Reel video already processed in media-service (filters, 9:16, optional music).
+     */
+    ReelDto ingestProcessedDelivery(String userId,
+                                   UUID mediaId,
+                                   String videoUrl,
+                                   String thumbnailUrl,
+                                   Integer durationSeconds,
+                                   String caption,
+                                   String location,
+                                   String filterType,
+                                   Boolean musicEnabled);
     
     /**
      * Update reel after transcoding is complete.

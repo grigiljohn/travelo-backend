@@ -18,6 +18,8 @@ public record PlanResponse(
         int maxPeople,
         String badge,
         String heroImageUrl,
-        String description
+        String description,
+        /** Hosting community id when the event is tied to a circle (empty string when none). */
+        String organizerCommunityId
 ) {
 }

@@ -1,139 +1,272 @@
 package com.travelo.notificationservice.event;
 
+import com.travelo.notificationservice.dto.NotificationDto;
 import com.travelo.notificationservice.entity.NotificationType;
+import com.travelo.notificationservice.service.NotificationBroadcastService;
 import com.travelo.notificationservice.service.NotificationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
 /**
- * Kafka consumer for notification events.
- * Consumes: post.liked, comment.created, user.followed, dm.received
+ * Kafka consumer that turns post / comment / follow / DM events into persisted
+ * notifications and fans them out to live WebSocket sessions.
+ *
+ * <p>Event contract sources:
+ * <ul>
+ *   <li>{@code post.liked}, {@code comment.created} — {@code social-service}
+ *       {@code PostEventPublisher} (see {@code dto.events.PostLikedEvent},
+ *       {@code dto.events.CommentCreatedEvent}). Field names are snake_case
+ *       (e.g. {@code post_owner_id}, {@code actor_user_id}).</li>
+ *   <li>{@code user.followed}, {@code user.unfollowed} — {@code identity-service}
+ *       {@code UserEventPublisher}.</li>
+ *   <li>{@code dm.received} — emitted by realtime-service messaging flow
+ *       (payload still uses the messaging-native keys).</li>
+ * </ul>
+ *
+ * <p>Self-action events (author == actor) are dropped. Unfollow events do not
+ * create notifications.
  */
 @Component
 public class NotificationEventConsumer {
 
     private static final Logger logger = LoggerFactory.getLogger(NotificationEventConsumer.class);
 
-    private final NotificationService notificationService;
+    private static final int PREVIEW_LIMIT = 140;
 
-    public NotificationEventConsumer(NotificationService notificationService) {
+    private final NotificationService notificationService;
+    private final NotificationBroadcastService broadcastService;
+
+    public NotificationEventConsumer(NotificationService notificationService,
+                                     NotificationBroadcastService broadcastService) {
         this.notificationService = notificationService;
+        this.broadcastService = broadcastService;
     }
 
-    @KafkaListener(topics = "post.liked", groupId = "notification-service-group")
+    /**
+     * {@code post.liked} — notify the post owner that someone liked their post.
+     * The {@code post.like.removed} topic is intentionally ignored (no notification).
+     */
+    @KafkaListener(topics = "${app.notifications.topics.post-liked:post.liked}",
+            groupId = "${app.notifications.group:notification-service-group}")
     public void handlePostLiked(Map<String, Object> event) {
         try {
-            logger.info("Received post.liked event: {}", event);
-            
-            String postId = String.valueOf(event.get("postId"));
-            String authorId = String.valueOf(event.get("authorId"));
-            String likerId = String.valueOf(event.get("likerId"));
-            String likerUsername = (String) event.get("likerUsername");
-
-            // Don't notify if user liked their own post
-            if (authorId.equals(likerId)) {
+            logger.info("flow=notification_received topic=post.liked payload={}", event);
+            String action = asString(event.get("action"));
+            if ("unliked".equalsIgnoreCase(action)) {
+                return; // Do not notify on unlike.
+            }
+            String postId = firstNonBlank(event, "post_id", "postId");
+            String ownerId = firstNonBlank(event, "post_owner_id", "authorId", "ownerId");
+            String actorId = firstNonBlank(event, "actor_user_id", "likerId", "actorId");
+            if (ownerId == null || actorId == null || postId == null) {
+                logger.warn("flow=notification_invalid topic=post.liked payload={}", event);
                 return;
             }
+            if (ownerId.equals(actorId)) {
+                return; // Self-action dedupe.
+            }
 
-            notificationService.createNotification(
-                    UUID.fromString(authorId),
+            Map<String, Object> data = new HashMap<>();
+            data.put("post_id", postId);
+            data.put("actor_id", actorId);
+
+            NotificationDto dto = notificationService.createNotification(
+                    parseUuid(ownerId),
                     NotificationType.POST_LIKED,
                     "New Like",
-                    likerUsername + " liked your post",
-                    UUID.fromString(likerId),
-                    UUID.fromString(postId),
+                    "Someone liked your post",
+                    parseUuid(actorId),
+                    parseUuid(postId),
                     "POST",
-                    Map.of("postId", postId)
-            );
+                    data);
+            if (dto != null) broadcastService.broadcast(dto);
         } catch (Exception e) {
-            logger.error("Error handling post.liked event: {}", e.getMessage(), e);
+            logger.error("flow=notification_error topic=post.liked err={}", e.toString(), e);
         }
     }
 
-    @KafkaListener(topics = "comment.created", groupId = "notification-service-group")
+    /**
+     * {@code comment.created} — notify the post owner (and, when it is a reply,
+     * switch type to {@link NotificationType#COMMENT_REPLIED} with a reply-aware
+     * title).
+     */
+    @KafkaListener(topics = "${app.notifications.topics.comment-created:comment.created}",
+            groupId = "${app.notifications.group:notification-service-group}")
     public void handleCommentCreated(Map<String, Object> event) {
         try {
-            logger.info("Received comment.created event: {}", event);
-            
-            String postId = String.valueOf(event.get("postId"));
-            String commentId = String.valueOf(event.get("commentId"));
-            String authorId = String.valueOf(event.get("authorId"));
-            String commenterId = String.valueOf(event.get("commenterId"));
-            String commenterUsername = (String) event.get("commenterUsername");
-            String commentText = (String) event.getOrDefault("commentText", "");
+            logger.info("flow=notification_received topic=comment.created payload={}", event);
+            String postId = firstNonBlank(event, "post_id", "postId");
+            String commentId = firstNonBlank(event, "comment_id", "commentId");
+            String ownerId = firstNonBlank(event, "post_owner_id", "authorId", "ownerId");
+            String actorId = firstNonBlank(event, "actor_user_id", "commenterId", "actorId");
+            String parentId = firstNonBlank(event, "parent_comment_id", "parentCommentId", "parentId");
+            String preview = truncate(firstNonBlankValue(event, "preview", "commentText"));
 
-            // Don't notify if user commented on their own post
-            if (authorId.equals(commenterId)) {
+            if (ownerId == null || actorId == null || postId == null) {
+                logger.warn("flow=notification_invalid topic=comment.created payload={}", event);
+                return;
+            }
+            if (ownerId.equals(actorId)) {
                 return;
             }
 
-            notificationService.createNotification(
-                    UUID.fromString(authorId),
-                    NotificationType.POST_COMMENTED,
-                    "New Comment",
-                    commenterUsername + " commented: " + (commentText.length() > 50 ? commentText.substring(0, 50) + "..." : commentText),
-                    UUID.fromString(commenterId),
-                    UUID.fromString(postId),
+            boolean isReply = parentId != null && !parentId.isBlank();
+            NotificationType type = isReply ? NotificationType.COMMENT_REPLIED : NotificationType.POST_COMMENTED;
+            String title = isReply ? "New Reply" : "New Comment";
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("post_id", postId);
+            if (commentId != null) data.put("comment_id", commentId);
+            if (parentId != null) data.put("parent_comment_id", parentId);
+            data.put("actor_id", actorId);
+
+            NotificationDto dto = notificationService.createNotification(
+                    parseUuid(ownerId),
+                    type,
+                    title,
+                    preview == null || preview.isBlank() ? "Someone commented on your post" : preview,
+                    parseUuid(actorId),
+                    parseUuid(postId),
                     "POST",
-                    Map.of("postId", postId, "commentId", commentId)
-            );
+                    data);
+            if (dto != null) broadcastService.broadcast(dto);
         } catch (Exception e) {
-            logger.error("Error handling comment.created event: {}", e.getMessage(), e);
+            logger.error("flow=notification_error topic=comment.created err={}", e.toString(), e);
         }
     }
 
-    @KafkaListener(topics = "user.followed", groupId = "notification-service-group")
+    /**
+     * {@code user.followed} — notify the followee; ignore the {@code unfollowed}
+     * action here (no "X stopped following you" notification).
+     */
+    @KafkaListener(topics = "${app.notifications.topics.user-followed:user.followed}",
+            groupId = "${app.notifications.group:notification-service-group}")
     public void handleUserFollowed(Map<String, Object> event) {
         try {
-            logger.info("Received user.followed event: {}", event);
-            
-            String followedUserId = String.valueOf(event.get("followedUserId"));
-            String followerId = String.valueOf(event.get("followerId"));
-            String followerUsername = (String) event.get("followerUsername");
+            logger.info("flow=notification_received topic=user.followed payload={}", event);
+            String action = asString(event.get("action"));
+            if ("unfollowed".equalsIgnoreCase(action)) {
+                return;
+            }
+            String followerId = firstNonBlank(event, "follower_id", "followerId");
+            String followeeId = firstNonBlank(event, "followee_id", "followedUserId", "followeeId");
+            if (followerId == null || followeeId == null) {
+                logger.warn("flow=notification_invalid topic=user.followed payload={}", event);
+                return;
+            }
+            if (followerId.equals(followeeId)) {
+                return;
+            }
 
-            notificationService.createNotification(
-                    UUID.fromString(followedUserId),
+            Map<String, Object> data = new HashMap<>();
+            data.put("actor_id", followerId);
+
+            NotificationDto dto = notificationService.createNotification(
+                    parseUuid(followeeId),
                     NotificationType.USER_FOLLOWED,
                     "New Follower",
-                    followerUsername + " started following you",
-                    UUID.fromString(followerId),
-                    UUID.fromString(followerId),
+                    "Someone started following you",
+                    parseUuid(followerId),
+                    parseUuid(followerId),
                     "USER",
-                    Map.of("followerId", followerId)
-            );
+                    data);
+            if (dto != null) broadcastService.broadcast(dto);
         } catch (Exception e) {
-            logger.error("Error handling user.followed event: {}", e.getMessage(), e);
+            logger.error("flow=notification_error topic=user.followed err={}", e.toString(), e);
         }
     }
 
-    @KafkaListener(topics = "dm.received", groupId = "notification-service-group")
+    /**
+     * {@code dm.received} — legacy messaging event; kept intact for the chat
+     * pipeline. Accepts both snake_case and camelCase keys defensively.
+     */
+    @KafkaListener(topics = "${app.notifications.topics.dm-received:dm.received}",
+            groupId = "${app.notifications.group:notification-service-group}")
     public void handleDmReceived(Map<String, Object> event) {
         try {
-            logger.info("Received dm.received event: {}", event);
-            
-            String recipientId = String.valueOf(event.get("recipientId"));
-            String senderId = String.valueOf(event.get("senderId"));
-            String senderUsername = (String) event.get("senderUsername");
-            String messagePreview = (String) event.getOrDefault("messagePreview", "");
+            logger.info("flow=notification_received topic=dm.received payload={}", event);
+            String recipientId = firstNonBlank(event, "recipient_id", "recipientId");
+            String senderId = firstNonBlank(event, "sender_id", "senderId");
+            String conversationId = firstNonBlank(event, "conversation_id", "conversationId");
+            String senderUsername = asString(event.get("senderUsername"));
+            String preview = truncate(firstNonBlankValue(event, "messagePreview", "message_preview", "preview"));
 
-            notificationService.createNotification(
-                    UUID.fromString(recipientId),
+            if (recipientId == null || senderId == null) {
+                logger.warn("flow=notification_invalid topic=dm.received payload={}", event);
+                return;
+            }
+            if (recipientId.equals(senderId)) {
+                return;
+            }
+
+            Map<String, Object> data = new HashMap<>();
+            if (conversationId != null) data.put("conversation_id", conversationId);
+            data.put("actor_id", senderId);
+
+            String body = (senderUsername == null || senderUsername.isBlank()
+                    ? "New message"
+                    : senderUsername) + (preview == null || preview.isBlank() ? "" : ": " + preview);
+
+            NotificationDto dto = notificationService.createNotification(
+                    parseUuid(recipientId),
                     NotificationType.DM_RECEIVED,
                     "New Message",
-                    senderUsername + ": " + messagePreview,
-                    UUID.fromString(senderId),
-                    UUID.fromString(String.valueOf(event.get("conversationId"))),
+                    body,
+                    parseUuid(senderId),
+                    conversationId == null ? null : parseUuid(conversationId),
                     "MESSAGE",
-                    Map.of("conversationId", event.get("conversationId"))
-            );
+                    data);
+            if (dto != null) broadcastService.broadcast(dto);
         } catch (Exception e) {
-            logger.error("Error handling dm.received event: {}", e.getMessage(), e);
+            logger.error("flow=notification_error topic=dm.received err={}", e.toString(), e);
         }
     }
-}
 
+    // ---------- helpers ----------
+
+    private static String asString(Object value) {
+        return value == null ? null : value.toString();
+    }
+
+    /**
+     * Return the first non-blank string value among {@code keys}, or {@code null}.
+     */
+    private static String firstNonBlank(Map<String, Object> event, String... keys) {
+        String v = firstNonBlankValue(event, keys);
+        return v;
+    }
+
+    private static String firstNonBlankValue(Map<String, Object> event, String... keys) {
+        for (String key : keys) {
+            Object raw = event.get(key);
+            if (raw == null) continue;
+            String s = raw.toString();
+            if (!s.isBlank() && !"null".equalsIgnoreCase(s)) {
+                return s;
+            }
+        }
+        return null;
+    }
+
+    private static UUID parseUuid(String value) {
+        if (value == null) return null;
+        try {
+            return UUID.fromString(value);
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
+    }
+
+    private static String truncate(String value) {
+        if (value == null) return null;
+        String trimmed = value.trim();
+        if (trimmed.length() <= PREVIEW_LIMIT) return trimmed;
+        return trimmed.substring(0, PREVIEW_LIMIT) + "…";
+    }
+}

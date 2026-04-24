@@ -9,7 +9,11 @@ import org.springframework.data.elasticsearch.repository.config.EnableElasticsea
 import org.springframework.kafka.annotation.EnableKafka;
 
 @SpringBootApplication(
-        scanBasePackages = {"com.travelo.searchservice", "com.travelo.discoveryservice.ai"},
+        scanBasePackages = {
+                "com.travelo.searchservice",
+                "com.travelo.discoveryservice.ai",
+                "com.travelo.discoveryservice.curated"
+        },
         exclude = {DataSourceAutoConfiguration.class, HibernateJpaAutoConfiguration.class}
 )
 @EnableDiscoveryClient

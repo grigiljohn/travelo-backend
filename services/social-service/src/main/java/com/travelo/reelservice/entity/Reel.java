@@ -41,6 +41,13 @@ public class Reel {
     @Column(name = "music_track", length = 255)
     private String musicTrack;
 
+    /** FFmpeg preset id (e.g. CINEMATIC, VIBRANT). */
+    @Column(name = "filter_type", length = 32)
+    private String filterType;
+
+    @Column(name = "music_enabled")
+    private Boolean musicEnabled;
+
     @Column(length = 255)
     private String location;
 
@@ -120,6 +127,10 @@ public class Reel {
     public void setCaption(String caption) { this.caption = caption; }
     public String getMusicTrack() { return musicTrack; }
     public void setMusicTrack(String musicTrack) { this.musicTrack = musicTrack; }
+    public String getFilterType() { return filterType; }
+    public void setFilterType(String filterType) { this.filterType = filterType; }
+    public Boolean getMusicEnabled() { return musicEnabled; }
+    public void setMusicEnabled(Boolean musicEnabled) { this.musicEnabled = musicEnabled; }
     public String getLocation() { return location; }
     public void setLocation(String location) { this.location = location; }
     public Integer getDurationSeconds() { return durationSeconds; }
@@ -164,6 +175,8 @@ public class Reel {
                 ", thumbnailUrl='" + thumbnailUrl + '\'' +
                 ", caption='" + caption + '\'' +
                 ", musicTrack='" + musicTrack + '\'' +
+                ", filterType='" + filterType + '\'' +
+                ", musicEnabled=" + musicEnabled +
                 ", location='" + location + '\'' +
                 ", durationSeconds=" + durationSeconds +
                 ", likeCount=" + likeCount +

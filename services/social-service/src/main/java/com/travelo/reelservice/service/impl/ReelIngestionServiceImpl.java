@@ -51,6 +51,8 @@ public class ReelIngestionServiceImpl implements ReelIngestionService {
         );
         reel.setLocation(request.getLocation());
         reel.setMusicTrack(request.getMusicTrack());
+        reel.setFilterType(request.getFilterType());
+        reel.setMusicEnabled(request.getMusicEnabled());
         reel.setStatus(Reel.Status.PENDING);
         reel.setTranscodingStatus(Reel.TranscodingStatus.PENDING);
 
@@ -60,6 +62,35 @@ public class ReelIngestionServiceImpl implements ReelIngestionService {
         publishTranscodingEvent(reel.getId(), request.getMediaId());
 
         logger.info("Created reel {} for user {}", reel.getId(), userId);
+        return ReelDto.fromEntity(reel);
+    }
+
+    @Override
+    public ReelDto ingestProcessedDelivery(String userId,
+                                          UUID mediaId,
+                                          String videoUrl,
+                                          String thumbnailUrl,
+                                          Integer durationSeconds,
+                                          String caption,
+                                          String location,
+                                          String filterType,
+                                          Boolean musicEnabled) {
+        Reel reel = new Reel(
+                null,
+                userId,
+                mediaId,
+                videoUrl,
+                thumbnailUrl,
+                caption
+        );
+        reel.setLocation(location);
+        reel.setFilterType(filterType);
+        reel.setMusicEnabled(musicEnabled);
+        reel.setDurationSeconds(durationSeconds);
+        reel.setStatus(Reel.Status.READY);
+        reel.setTranscodingStatus(Reel.TranscodingStatus.COMPLETED);
+        reel = reelRepository.save(reel);
+        logger.info("Ingested processed reel {} mediaId={}", reel.getId(), mediaId);
         return ReelDto.fromEntity(reel);
     }
 

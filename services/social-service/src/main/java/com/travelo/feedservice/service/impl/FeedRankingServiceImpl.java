@@ -35,6 +35,7 @@ public class FeedRankingServiceImpl implements FeedRankingService {
     private final double reelBoost;
     private final double nonFollowingAffinityScore;
     private final double halfLifeHours;
+    private final double maxAgeHours;
     private final int maxConsecutiveSameAuthor;
     private final int maxConsecutiveReels;
 
@@ -47,6 +48,7 @@ public class FeedRankingServiceImpl implements FeedRankingService {
             @Value("${app.feed.ranking.reel-boost:1.5}") double reelBoost,
             @Value("${app.feed.ranking.non-following-affinity-score:0.5}") double nonFollowingAffinityScore,
             @Value("${app.feed.ranking.recency-half-life-hours:24.0}") double halfLifeHours,
+            @Value("${app.feed.ranking.max-age-hours:336.0}") double maxAgeHours,
             @Value("${app.feed.diversity.max-consecutive-same-author:2}") int maxConsecutiveSameAuthor,
             @Value("${app.feed.diversity.max-consecutive-reels:2}") int maxConsecutiveReels) {
         this.recencyWeight = recencyWeight;
@@ -57,6 +59,9 @@ public class FeedRankingServiceImpl implements FeedRankingService {
         this.reelBoost = reelBoost;
         this.nonFollowingAffinityScore = nonFollowingAffinityScore;
         this.halfLifeHours = halfLifeHours;
+        // 0 disables the floor. Clamp to a sane upper bound so misconfiguration
+        // can't accidentally surface year-old posts.
+        this.maxAgeHours = maxAgeHours <= 0.0d ? 0.0d : Math.min(maxAgeHours, 24.0d * 365.0d);
         this.maxConsecutiveSameAuthor = Math.max(1, maxConsecutiveSameAuthor);
         this.maxConsecutiveReels = Math.max(1, maxConsecutiveReels);
     }
@@ -129,7 +134,21 @@ public class FeedRankingServiceImpl implements FeedRankingService {
         debug.setBaseScore(baseScore);
         debug.setOnlineSignalScore(0.0d);
         debug.setFinalScore(baseScore);
+        debug.setAgeHours(calculateAgeHours(post));
         return debug;
+    }
+
+    private Double calculateAgeHours(PostDto post) {
+        if (post == null || post.getCreatedAt() == null) {
+            return null;
+        }
+        try {
+            Instant postTime = Instant.parse(post.getCreatedAt());
+            long minutes = ChronoUnit.MINUTES.between(postTime, Instant.now());
+            return Math.max(0L, minutes) / 60.0d;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /**
@@ -144,14 +163,18 @@ public class FeedRankingServiceImpl implements FeedRankingService {
         try {
             Instant postTime = Instant.parse(post.getCreatedAt());
             Instant now = Instant.now();
-            long hoursAgo = ChronoUnit.HOURS.between(postTime, now);
+            long hoursAgo = Math.max(0L, ChronoUnit.HOURS.between(postTime, now));
 
-            // Exponential decay: score = e^(-λ * t)
-            // where λ = ln(2) / half_life
+            // Explicit absolute-age floor. Without this the exponential decay
+            // still produces tiny-but-nonzero scores for ancient posts, so a
+            // cold cache or thin feed could bubble up a year-old post.
+            if (maxAgeHours > 0.0d && hoursAgo >= maxAgeHours) {
+                return 0.0d;
+            }
+
+            // Exponential decay: score = e^(-λ * t), λ = ln(2) / half_life.
             double lambda = Math.log(2) / halfLifeHours;
             double score = Math.exp(-lambda * hoursAgo);
-
-            // Normalize to [0, 1] range (clamp if needed)
             return Math.min(1.0, Math.max(0.0, score));
         } catch (Exception e) {
             logger.warn("Error parsing createdAt for post {}: {}", post.getId(), e.getMessage());

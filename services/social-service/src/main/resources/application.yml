@@ -42,7 +42,12 @@ spring:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
 
-# Three PostgreSQL databases: posts (primary JPA + Flyway db/migration/post), stories (db/migration/story), reels (db/migration/reel).
+# PostgreSQL: posts DB holds posts + Flyway (db/migration/post) including circle_plans / participants; stories (db/migration/story); reels (db/migration/reel).
+#
+# This service uses **three** pools. Defaults stay small so a shared local Postgres
+# (default max_connections ~100) is not exhausted by other JVMs + this app.
+# If you see: "remaining connection slots are reserved for … SUPERUSER", free slots
+# (stop other services, or raise max_connections) or set env SOCIAL_HIKARI_MAX_POOL lower.
 social:
   datasource:
     # Bind to HikariDataSource: use jdbc-url (not url) so jdbcUrl is set; pool props must be flat under each datasource.
@@ -53,7 +58,8 @@ social:
       driver-class-name: org.postgresql.Driver
       initialization-fail-timeout: -1
       connection-timeout: 30000
-      maximum-pool-size: 10
+      maximum-pool-size: ${SOCIAL_HIKARI_MAX_POOL:4}
+      minimum-idle: 0
       connection-test-query: SELECT 1
     story:
       jdbc-url: ${STORY_DATASOURCE_URL:jdbc:postgresql://localhost:5432/travelo_stories}
@@ -62,7 +68,8 @@ social:
       driver-class-name: org.postgresql.Driver
       initialization-fail-timeout: -1
       connection-timeout: 30000
-      maximum-pool-size: 10
+      maximum-pool-size: ${SOCIAL_HIKARI_MAX_POOL:4}
+      minimum-idle: 0
       connection-test-query: SELECT 1
     reel:
       jdbc-url: ${REEL_DATASOURCE_URL:jdbc:postgresql://localhost:5432/travelo_reels}
@@ -71,7 +78,8 @@ social:
       driver-class-name: org.postgresql.Driver
       initialization-fail-timeout: -1
       connection-timeout: 30000
-      maximum-pool-size: 10
+      maximum-pool-size: ${SOCIAL_HIKARI_MAX_POOL:4}
+      minimum-idle: 0
       connection-test-query: SELECT 1
 
 logging:
@@ -163,9 +171,26 @@ app:
     cache-ttl-seconds: ${FEED_CACHE_TTL:3600}
     fan-out-enabled: ${FEED_FANOUT_ENABLED:true}
     seen-enabled: ${FEED_SEEN_ENABLED:false}
+    seen-ttl-days: ${FEED_SEEN_TTL_DAYS:7}
+    seen:
+      # Hard-filter window: anything marked seen within this many hours is
+      # dropped from the next feed response entirely. Outside the window but
+      # still within seen-ttl-days the post is soft-demoted instead.
+      hard-filter-window-hours: ${FEED_SEEN_HARD_FILTER_WINDOW_HOURS:24}
+      # Demotion strength for soft-seen posts in the range [0, 1]. 0 disables
+      # soft demotion (equivalent to hard-filter-only); 1 pushes every soft
+      # post to the end of the list.
+      soft-penalty: ${FEED_SEEN_SOFT_PENALTY:0.35}
     mock-fallback-enabled: ${FEED_MOCK_FALLBACK_ENABLED:true}
     mock-fallback-mode: ${FEED_MOCK_FALLBACK_MODE:on_error} # off | on_error | always
     recommended-prefetch-limit: ${FEED_RECOMMENDED_PREFETCH_LIMIT:12}
+    cursor:
+      # HMAC-SHA256 secret signing the opaque pagination cursor. MUST be
+      # overridden in production (the default value logs a warning at startup).
+      secret: ${FEED_CURSOR_SECRET:travelo-feed-cursor-dev-secret-change-me}
+      # Cursors older than this are rejected and the request is treated as a
+      # fresh first-page. Keeps users from resuming a day-old ranked snapshot.
+      ttl-minutes: ${FEED_CURSOR_TTL_MINUTES:10}
     ranking:
       weights:
         recency: ${FEED_RANKING_WEIGHT_RECENCY:0.35}
@@ -176,6 +201,9 @@ app:
       reel-boost: ${FEED_RANKING_REEL_BOOST:1.5}
       non-following-affinity-score: ${FEED_RANKING_NON_FOLLOWING_AFFINITY:0.5}
       recency-half-life-hours: ${FEED_RANKING_RECENCY_HALF_LIFE_HOURS:24.0}
+      # Absolute freshness floor: posts older than this many hours get a
+      # recency score of 0 regardless of engagement. Set to 0 to disable.
+      max-age-hours: ${FEED_RANKING_MAX_AGE_HOURS:336.0}
     diversity:
       max-consecutive-same-author: ${FEED_DIVERSITY_MAX_CONSECUTIVE_SAME_AUTHOR:2}
       max-consecutive-reels: ${FEED_DIVERSITY_MAX_CONSECUTIVE_REELS:2}
@@ -188,6 +216,19 @@ app:
     events:
       kafka-enabled: ${FEED_EVENTS_KAFKA_ENABLED:false}
       kafka-topic: ${FEED_EVENTS_KAFKA_TOPIC:feed.user_events}
+      consumer-group: ${FEED_EVENTS_CONSUMER_GROUP:feed-service-group}
+      topics:
+        user-followed: ${USER_FOLLOWED_TOPIC:user.followed}
+        user-unfollowed: ${USER_UNFOLLOWED_TOPIC:user.unfollowed}
+  post:
+    events:
+      kafka-enabled: ${POST_EVENTS_KAFKA_ENABLED:false}
+      topics:
+        post-created: ${POST_CREATED_TOPIC:post.created}
+        post-liked: ${POST_LIKED_TOPIC:post.liked}
+        post-like-removed: ${POST_LIKE_REMOVED_TOPIC:post.like.removed}
+        comment-created: ${COMMENT_CREATED_TOPIC:comment.created}
+        tag-created: ${TAG_CREATED_TOPIC:tag.created}
 
 services:
   ai-orchestrator:
@@ -280,3 +321,19 @@ resilience4j:
       recommendation-service:
         maxAttempts: 1
         waitDuration: 100ms
+---
+# Minimal connection footprint: use when Postgres reports "connection slots
+# reserved for SUPERUSER" and you have not yet raised the server max_connections.
+# VM: -Dspring.profiles.active=local  (or SPRING_PROFILES_ACTIVE=local,default)
+spring:
+  config:
+    activate:
+      on-profile: local
+social:
+  datasource:
+    post:
+      maximum-pool-size: 1
+    story:
+      maximum-pool-size: 1
+    reel:
+      maximum-pool-size: 1

@@ -60,6 +60,17 @@ spring:
           refresh:
             adaptive: true
             period: 30s
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      # Do not block UserService calls if Kafka is unreachable.
+      properties:
+        max.block.ms: 2000
+    # identity-service does not consume; disable listener auto-startup defensively
+    listener:
+      auto-startup: false
   mail:
     host: ${MAIL_HOST:smtp.gmail.com}
     port: ${MAIL_PORT:587}
@@ -151,5 +162,12 @@ app:
     max-attempts: 5  # Maximum failed login attempts before lockout
     lockout-duration: 900  # 15 minutes in seconds
     attempt-window: 900  # 15 minutes window for counting attempts
+  user:
+    events:
+      # Toggle via USER_EVENTS_KAFKA_ENABLED=true when Kafka is reachable.
+      kafka-enabled: ${USER_EVENTS_KAFKA_ENABLED:false}
+      topics:
+        user-followed: ${USER_FOLLOWED_TOPIC:user.followed}
+        user-unfollowed: ${USER_UNFOLLOWED_TOPIC:user.unfollowed}
   scheduled-tasks:
     enabled: true  # Enable scheduled cleanup tasks

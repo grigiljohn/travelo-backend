@@ -161,6 +161,56 @@ public class SearchController {
         return ResponseEntity.ok(Map.of("success", true, "data", categories));
     }
 
+    /**
+     * Lightweight trending-queries endpoint for the search screen empty state.
+     * Currently config-free: returns a curated blend of seasonal destinations and
+     * evergreen travel verticals. Frontend treats this as a "hint" — not
+     * personalized — so it can be called anonymously.
+     */
+    @GetMapping("/trending")
+    @Operation(summary = "Get trending search keywords",
+               description = "Returns a curated list of trending keywords/hashtags for the search empty state.")
+    public ResponseEntity<Map<String, Object>> getTrending(
+            @RequestParam(value = "limit", defaultValue = "12") int limit) {
+        if (limit < 1) limit = 12;
+        if (limit > 24) limit = 24;
+        logger.debug("GET /api/v1/search/trending limit={}", limit);
+
+        final List<String> curated = List.of(
+                "#Bali",
+                "#Lisbon",
+                "Swiss Alps",
+                "Santorini sunset",
+                "Tokyo food tour",
+                "Weekend in Paris",
+                "Iceland aurora",
+                "Marrakech medina",
+                "Kyoto temples",
+                "Cappadocia hot air",
+                "Amsterdam canals",
+                "Croatia islands",
+                "Dubai skyline",
+                "Costa Rica jungle",
+                "Greek islands",
+                "Norwegian fjords",
+                "Patagonia hike",
+                "Seychelles beach",
+                "Vietnam street food",
+                "Safari Kenya",
+                "Iguazu falls",
+                "Petra Jordan",
+                "Bora Bora",
+                "Scottish highlands"
+        );
+
+        List<String> out = curated.subList(0, Math.min(limit, curated.size()));
+
+        Map<String, Object> result = new java.util.HashMap<>();
+        result.put("success", true);
+        result.put("data", out);
+        return ResponseEntity.ok(result);
+    }
+
     @GetMapping("/feed/following")
     @Operation(summary = "Get Following Feed", description = "Get reels from users that the current user follows")
     public ResponseEntity<Map<String, Object>> getFollowingFeed(

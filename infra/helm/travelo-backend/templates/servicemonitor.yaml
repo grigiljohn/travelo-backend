@@ -1,0 +1,18 @@
+{{- if .Values.serviceMonitor.enabled -}}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "travelo-backend.fullname" . }}-{{ .Values.service.name }}
+  labels:
+    {{- include "travelo-backend.labels" . | nindent 4 }}
+    app.kubernetes.io/component: {{ .Values.service.name }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "travelo-backend.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: {{ .Values.service.name }}
+  endpoints:
+    - port: http
+      path: {{ .Values.serviceMonitor.path }}
+      interval: {{ .Values.serviceMonitor.interval }}
+{{- end }}

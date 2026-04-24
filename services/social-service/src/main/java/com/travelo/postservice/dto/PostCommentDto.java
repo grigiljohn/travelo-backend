@@ -27,15 +27,24 @@ public record PostCommentDto(
     String avatarUrl // Avatar URL of comment author (for display)
 ) {
     public static PostCommentDto fromEntity(PostComment comment) {
-        return fromEntity(comment, null, false);
+        return fromEntity(comment, null, false, null, null);
     }
 
     public static PostCommentDto fromEntity(PostComment comment, List<PostCommentDto> replies, boolean isLiked) {
-        // TODO: Fetch username and avatarUrl from user-service
-        // For now, use mock data based on userId
-        String username = getMockUsername(comment.getUserId());
-        String avatarUrl = getMockAvatarUrl(comment.getUserId());
-        
+        return fromEntity(comment, replies, isLiked, null, null);
+    }
+
+    /**
+     * Build a DTO from a persisted comment, stamping the caller-resolved
+     * {@code username}/{@code avatarUrl} when the user-service call succeeded.
+     * Callers that lack identity context should pass nulls — the client will
+     * then render a generic "User" affordance.
+     */
+    public static PostCommentDto fromEntity(PostComment comment,
+                                            List<PostCommentDto> replies,
+                                            boolean isLiked,
+                                            String username,
+                                            String avatarUrl) {
         return new PostCommentDto(
             comment.getId(),
             comment.getPostId(),
@@ -50,35 +59,6 @@ public record PostCommentDto(
             username,
             avatarUrl
         );
-    }
-    
-    /**
-     * Get mock username based on userId.
-     * TODO: Replace with actual user-service call
-     */
-    private static String getMockUsername(String userId) {
-        // Map common mock user IDs to usernames
-        return switch (userId) {
-            case "user-1" -> "jane_doe";
-            case "user-2" -> "travel_lover";
-            case "user-3" -> "photography_enthusiast";
-            default -> "user_" + userId.substring(0, Math.min(8, userId.length()));
-        };
-    }
-    
-    /**
-     * Get mock avatar URL based on userId.
-     * TODO: Replace with actual user-service call
-     */
-    private static String getMockAvatarUrl(String userId) {
-        // Map common mock user IDs to avatar URLs
-        int avatarIndex = switch (userId) {
-            case "user-1" -> 1;
-            case "user-2" -> 2;
-            case "user-3" -> 3;
-            default -> Math.abs(userId.hashCode() % 10) + 1;
-        };
-        return "https://i.pravatar.cc/150?img=" + avatarIndex;
     }
 }
 

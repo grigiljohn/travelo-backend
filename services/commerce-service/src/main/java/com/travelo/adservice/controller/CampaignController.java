@@ -5,6 +5,8 @@ import com.travelo.adservice.dto.CampaignResponse;
 import com.travelo.adservice.dto.ErrorResponse;
 import com.travelo.adservice.dto.PageResponse;
 import com.travelo.adservice.entity.CampaignStatus;
+import com.travelo.adservice.dto.CampaignMetricDailyResponse;
+import com.travelo.adservice.service.CampaignMetricsService;
 import com.travelo.adservice.service.CampaignService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -18,6 +20,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -28,9 +31,27 @@ import java.util.UUID;
 public class CampaignController {
 
     private final CampaignService campaignService;
+    private final CampaignMetricsService campaignMetricsService;
 
-    public CampaignController(CampaignService campaignService) {
+    public CampaignController(CampaignService campaignService, CampaignMetricsService campaignMetricsService) {
         this.campaignService = campaignService;
+        this.campaignMetricsService = campaignMetricsService;
+    }
+
+    @GetMapping("/metrics/daily")
+    @Operation(summary = "Daily campaign metrics", description = "Persisted per-day roll-ups (impressions, spend, etc.) for reporting")
+    @ApiResponse(responseCode = "200", description = "Time series of daily metrics",
+            content = @Content(schema = @Schema(implementation = CampaignMetricDailyResponse.class)))
+    public ResponseEntity<List<CampaignMetricDailyResponse>> getDailyMetrics(
+            @RequestParam("businessAccountId") UUID businessAccountId,
+            @RequestParam("from") LocalDate from,
+            @RequestParam("to") LocalDate to,
+            @RequestParam(value = "campaignId", required = false) UUID campaignId) {
+        if (to.isBefore(from)) {
+            return ResponseEntity.badRequest().build();
+        }
+        return ResponseEntity.ok(
+                campaignMetricsService.getDailyMetrics(businessAccountId, from, to, campaignId));
     }
 
     @GetMapping

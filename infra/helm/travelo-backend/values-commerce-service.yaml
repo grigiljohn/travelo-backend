@@ -1,0 +1,21 @@
+service:
+  name: commerce-service
+  port: 8097
+
+extraEnv:
+  - name: EUREKA_CLIENT_ENABLED
+    value: "false"
+  - name: SPRING_CONFIG_IMPORT
+    value: ""
+  - name: MEDIA_SERVICE_URL
+    value: "http://travelo-media-service:8084"
+
+envFrom:
+  - secretRef:
+      name: travelo-commerce-service-secrets
+  # Expected keys: SHOP_POSTGRES_URL, AD_POSTGRES_URL, *_USERNAME/PASSWORD,
+  # KAFKA_BOOTSTRAP_SERVERS
+
+resources:
+  limits:   { cpu: 1000m, memory: 1Gi }
+  requests: { cpu: 250m,  memory: 512Mi }

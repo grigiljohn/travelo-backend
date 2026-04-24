@@ -31,8 +31,19 @@ public class SecurityConfig {
                 // access tokens and surface as 403 before the request reaches identity.)
                 .pathMatchers(
                         "/actuator/**",
+                        // Liveness/readiness via gateway (K8s / LB) without JWT.
+                        "/*/actuator/health",
+                        "/*/actuator/health/**",
+                        "/*/actuator/info",
                         "/auth-service/**",
                         "/user-service/**",
+                        // Public read-only catalog (categories, tags) from admin-service; admin JWT is not
+                        // available in the mobile app. StripPrefix still forwards to /api/v1/catalog/**.
+                        "/admin-service/api/v1/catalog/**",
+                        // commerce-service (ad-service route) has no Spring Security; browser SPA uses
+                        // this path. Restrict via network / separate gateway in hardening.
+                        "/ad-service/**",
+                        "/shop-service/**",
                         "/swagger-ui/**",
                         "/v3/api-docs/**")
                     .permitAll()

@@ -20,6 +20,12 @@ public class CreateReelRequest {
     @JsonProperty("music_track")
     private String musicTrack;
 
+    @JsonProperty("filter_type")
+    private String filterType;
+
+    @JsonProperty("music_enabled")
+    private Boolean musicEnabled;
+
     // Getters and Setters
     public String getPostId() { return postId; }
     public void setPostId(String postId) { this.postId = postId; }
@@ -31,5 +37,9 @@ public class CreateReelRequest {
     public void setLocation(String location) { this.location = location; }
     public String getMusicTrack() { return musicTrack; }
     public void setMusicTrack(String musicTrack) { this.musicTrack = musicTrack; }
+    public String getFilterType() { return filterType; }
+    public void setFilterType(String filterType) { this.filterType = filterType; }
+    public Boolean getMusicEnabled() { return musicEnabled; }
+    public void setMusicEnabled(Boolean musicEnabled) { this.musicEnabled = musicEnabled; }
 }
 

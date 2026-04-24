@@ -16,3 +16,12 @@
 # OS Files
 .DS_Store
 Thumbs.db
+
+# Environment / secrets — never commit real creds.
+.env
+.env.local
+.env.*.local
+*.pem
+*.pfx
+infra/railway/env/*.env
+!infra/railway/env/*.example

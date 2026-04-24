@@ -57,4 +57,8 @@ app:
     enabled: true
     default-rate: 200  # feed requests per minute
     per-user-rate: 300
-
+  feed:
+    # Prefer real ads from commerce-service; only empty feed on delivery failure
+    # when this is off (set FEED_MOCK_FALLBACK_ENABLED / MODE via env in emergencies).
+    mock-fallback-enabled: ${FEED_MOCK_FALLBACK_ENABLED:false}
+    mock-fallback-mode: ${FEED_MOCK_FALLBACK_MODE:off}

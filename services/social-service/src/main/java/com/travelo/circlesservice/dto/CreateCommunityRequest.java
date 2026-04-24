@@ -10,12 +10,19 @@ public class CreateCommunityRequest {
 
     private String name;
     private String description;
+    private String tagline;
     private List<String> tags = new ArrayList<>();
-    /** "public" or "private" */
+    private List<String> topics = new ArrayList<>();
+    private String rules;
+    private String coverImageUrl;
+    private String iconImageUrl;
+    /** "public", "private", or "secret" (invite-only, not promoted in discovery). */
     private String visibility;
     private String city;
     /** User ids to add as members at creation time (friends circle). */
     private List<String> inviteUserIds = new ArrayList<>();
+    private Boolean requireAdminApproval;
+    private Boolean allowMemberInvites;
 
     public String getName() {
         return name;
@@ -31,6 +38,62 @@ public class CreateCommunityRequest {
 
     public void setDescription(String description) {
         this.description = description;
+    }
+
+    public String getTagline() {
+        return tagline;
+    }
+
+    public void setTagline(String tagline) {
+        this.tagline = tagline;
+    }
+
+    public List<String> getTopics() {
+        return topics;
+    }
+
+    public void setTopics(List<String> topics) {
+        this.topics = topics != null ? topics : new ArrayList<>();
+    }
+
+    public String getRules() {
+        return rules;
+    }
+
+    public void setRules(String rules) {
+        this.rules = rules;
+    }
+
+    public String getCoverImageUrl() {
+        return coverImageUrl;
+    }
+
+    public void setCoverImageUrl(String coverImageUrl) {
+        this.coverImageUrl = coverImageUrl;
+    }
+
+    public String getIconImageUrl() {
+        return iconImageUrl;
+    }
+
+    public void setIconImageUrl(String iconImageUrl) {
+        this.iconImageUrl = iconImageUrl;
+    }
+
+    public Boolean getRequireAdminApproval() {
+        return requireAdminApproval;
+    }
+
+    public void setRequireAdminApproval(Boolean requireAdminApproval) {
+        this.requireAdminApproval = requireAdminApproval;
+    }
+
+    public Boolean getAllowMemberInvites() {
+        return allowMemberInvites;
+    }
+
+    public void setAllowMemberInvites(Boolean allowMemberInvites) {
+        this.allowMemberInvites = allowMemberInvites;
     }
 
     public List<String> getTags() {

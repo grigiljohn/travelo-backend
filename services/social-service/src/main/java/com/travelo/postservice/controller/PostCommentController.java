@@ -5,26 +5,41 @@ import com.travelo.postservice.dto.PostCommentDto;
 import com.travelo.postservice.dto.CreatePostCommentRequest;
 import com.travelo.postservice.dto.ApiResponse;
 import com.travelo.postservice.dto.PageResponse;
+import com.travelo.postservice.realtime.CommentStreamBroker;
+import com.travelo.postservice.realtime.CommentStreamEvent;
 import com.travelo.postservice.service.PostCommentService;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 @RestController
 @RequestMapping("/api/v1/posts/{postId}/comments")
 public class PostCommentController {
 
     private static final Logger logger = LoggerFactory.getLogger(PostCommentController.class);
-    private final PostCommentService postCommentService;
+    /** Matches the reel-progress SSE stream — long enough to cover a realistic thread-watch session. */
+    private static final long STREAM_IDLE_TIMEOUT_MS = 10L * 60L * 1000L; // 10 min
+    /** Keep-alive tick so proxies (ALB, nginx) don't kill the connection while nobody comments. */
+    private static final long STREAM_HEARTBEAT_MS = 25_000L;
 
-    public PostCommentController(PostCommentService postCommentService) {
+    private final PostCommentService postCommentService;
+    private final CommentStreamBroker commentStreamBroker;
+
+    public PostCommentController(PostCommentService postCommentService,
+                                 CommentStreamBroker commentStreamBroker) {
         this.postCommentService = postCommentService;
+        this.commentStreamBroker = commentStreamBroker;
         logger.info("PostCommentController initialized");
     }
 
@@ -169,6 +184,82 @@ public class PostCommentController {
             logger.error("Error retrieving replies for comment {}", commentId, e);
             throw e;
         }
+    }
+
+    /**
+     * Server-Sent Events stream of new top-level + reply comments for {@code postId}.
+     * One {@code comment} event per newly persisted row, carrying the same JSON
+     * shape the client already parses from {@code GET /api/v1/posts/{postId}/comments}.
+     *
+     * <p>Stream closes after 10 minutes idle, when the client disconnects, or when
+     * the server is shut down. Periodic SSE comment lines (<code>": hb"</code>)
+     * keep the connection alive through LB idle timeouts.
+     *
+     * <p>GET /api/v1/posts/{postId}/comments/stream  (Accept: text/event-stream)
+     */
+    @GetMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamComments(@PathVariable String postId) {
+        SseEmitter emitter = new SseEmitter(STREAM_IDLE_TIMEOUT_MS);
+
+        AtomicBoolean closed = new AtomicBoolean(false);
+        AtomicReference<CommentStreamBroker.Subscription> subRef = new AtomicReference<>();
+
+        Runnable cleanup = () -> {
+            if (closed.compareAndSet(false, true)) {
+                CommentStreamBroker.Subscription s = subRef.getAndSet(null);
+                if (s != null) {
+                    try { s.close(); } catch (Exception ignored) { /* best-effort */ }
+                }
+            }
+        };
+
+        emitter.onCompletion(cleanup);
+        emitter.onTimeout(() -> { try { emitter.complete(); } catch (Exception ignored) {} cleanup.run(); });
+        emitter.onError(e -> cleanup.run());
+
+        Consumer<CommentStreamEvent> listener = ev -> {
+            if (closed.get() || ev == null) return;
+            try {
+                emitter.send(SseEmitter.event().name("comment").data(ev));
+            } catch (Exception e) {
+                cleanup.run();
+            }
+        };
+
+        subRef.set(commentStreamBroker.subscribe(postId, listener));
+
+        // Initial "ready" ping so the client knows the subscription is live
+        // even before the first comment arrives.
+        try {
+            emitter.send(SseEmitter.event().name("ready").data("ok"));
+        } catch (Exception e) {
+            cleanup.run();
+            return emitter;
+        }
+
+        // Heartbeat thread — cheap & stateless, terminates when emitter closes.
+        Thread heartbeat = new Thread(() -> {
+            while (!closed.get()) {
+                try {
+                    Thread.sleep(STREAM_HEARTBEAT_MS);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+                if (closed.get()) return;
+                try {
+                    // A single-line SSE comment frame: valid, ignored by all clients, keeps proxies warm.
+                    emitter.send(SseEmitter.event().comment("hb"));
+                } catch (Exception e) {
+                    cleanup.run();
+                    return;
+                }
+            }
+        }, "comments-sse-hb-" + postId);
+        heartbeat.setDaemon(true);
+        heartbeat.start();
+
+        return emitter;
     }
 
     // Inner classes for requests

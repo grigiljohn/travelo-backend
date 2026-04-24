@@ -31,7 +31,7 @@ public class AdServiceClient {
 
     public AdServiceClient(
             ResilientWebClientConfig resilientWebClientConfig,
-            @Value("${app.ad-service.url:http://localhost:8093}") String adServiceBaseUrl,
+            @Value("${app.ad-service.url:http://localhost:8097}") String adServiceBaseUrl,
             @Value("${app.feed.mock-fallback-enabled:true}") boolean mockFallbackEnabled,
             @Value("${app.feed.mock-fallback-mode:on_error}") String mockFallbackMode,
             FeedMetricsService feedMetricsService) {
@@ -105,6 +105,9 @@ public class AdServiceClient {
                         "offers.travelo.example",
                         "Travelo Partners",
                         "https://travelo.example",
+                        null,
+                        null,
+                        "travelo://shop/mock",
                         Map.of("fallback", true)
                 ))
                 .toList();

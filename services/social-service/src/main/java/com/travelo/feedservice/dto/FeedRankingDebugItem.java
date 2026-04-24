@@ -40,6 +40,12 @@ public class FeedRankingDebugItem {
     @JsonProperty("content_type_component")
     private double contentTypeComponent;
 
+    @JsonProperty("age_hours")
+    private Double ageHours;
+
+    @JsonProperty("seen_state")
+    private String seenState;
+
     public String getPostId() {
         return postId;
     }
@@ -126,6 +132,22 @@ public class FeedRankingDebugItem {
 
     public void setContentTypeComponent(double contentTypeComponent) {
         this.contentTypeComponent = contentTypeComponent;
+    }
+
+    public Double getAgeHours() {
+        return ageHours;
+    }
+
+    public void setAgeHours(Double ageHours) {
+        this.ageHours = ageHours;
+    }
+
+    public String getSeenState() {
+        return seenState;
+    }
+
+    public void setSeenState(String seenState) {
+        this.seenState = seenState;
     }
 }
 

@@ -22,5 +22,11 @@ public interface PostTagRepository extends JpaRepository<PostTag, Long> {
     void deleteByPostId(@Param("postId") String postId);
     
     void deleteByPost(Post post);
+
+    /**
+     * Number of existing rows for a given tag name. Used to detect first-use of a tag
+     * so we can emit a `tag.created` event to downstream search/trending indexers.
+     */
+    long countByTag(String tag);
 }
 

@@ -1,16 +1,13 @@
+# Prefer settings in application.properties (composite native; no Git).
+# This file keeps shared logging / management; optional PORT override for server.port.
 server:
   port: ${PORT:8888}
 
 spring:
   application:
     name: config-server
-  profiles:
-    active: native
   cloud:
     config:
-      server:
-        native:
-          search-locations: classpath:/configs
       label: main
 
 logging:

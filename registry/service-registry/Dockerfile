@@ -1,15 +1,44 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1.6
+FROM maven:3.9.6-eclipse-temurin-21 AS deps
+WORKDIR /workspace
+COPY pom.xml ./
+COPY libs/commons/pom.xml libs/commons/
+COPY libs/security/pom.xml libs/security/
+COPY libs/events/pom.xml libs/events/
+COPY config/config-server/pom.xml config/config-server/
+COPY registry/service-registry/pom.xml registry/service-registry/
+COPY services/api-gateway/pom.xml services/api-gateway/
+COPY services/identity-service/pom.xml services/identity-service/
+COPY services/social-service/pom.xml services/social-service/
+COPY services/media-service/pom.xml services/media-service/
+COPY services/discovery-service/pom.xml services/discovery-service/
+COPY services/realtime-service/pom.xml services/realtime-service/
+COPY services/commerce-service/pom.xml services/commerce-service/
+COPY services/platform-service/pom.xml services/platform-service/
+RUN --mount=type=cache,target=/root/.m2 \
+    mvn -B -pl registry/service-registry -am -f pom.xml dependency:go-offline -DskipTests
+
 FROM maven:3.9.6-eclipse-temurin-21 AS build
 WORKDIR /workspace
+COPY --from=deps /root/.m2 /root/.m2
 COPY . .
-RUN mvn -B -pl registry/service-registry -am -f pom.xml clean package -DskipTests
+RUN --mount=type=cache,target=/root/.m2 \
+    mvn -B -pl registry/service-registry -am -f pom.xml clean package -DskipTests
 
-FROM eclipse-temurin:21-jre
+FROM eclipse-temurin:21-jre-jammy
 WORKDIR /app
-# Install curl for health checks
-RUN apt-get update && \
-    apt-get install -y curl && \
-    rm -rf /var/lib/apt/lists/*
-COPY --from=build /workspace/registry/service-registry/target/service-registry-*.jar app.jar
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl tini ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && groupadd --system --gid 1001 travelo \
+ && useradd  --system --uid 1001 --gid travelo --home-dir /app --shell /sbin/nologin travelo \
+ && chown travelo:travelo /app
+COPY --from=build --chown=travelo:travelo /workspace/registry/service-registry/target/service-registry-*.jar /app/app.jar
+USER travelo
 EXPOSE 8761
-ENTRYPOINT ["java","-jar","/app/app.jar"]
+ENV JAVA_OPTS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError -Djava.security.egd=file:/dev/./urandom"
+ENV SPRING_PROFILES_ACTIVE="production"
+HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=5 \
+  CMD curl -fsS http://127.0.0.1:8761/actuator/health || exit 1
+ENTRYPOINT ["/usr/bin/tini","--"]
+CMD ["sh","-c","exec java $JAVA_OPTS -jar /app/app.jar"]

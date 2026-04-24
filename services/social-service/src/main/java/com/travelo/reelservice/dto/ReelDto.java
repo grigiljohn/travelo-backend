@@ -32,6 +32,12 @@ public class ReelDto {
     
     @JsonProperty("music_track")
     private String musicTrack;
+
+    @JsonProperty("filter_type")
+    private String filterType;
+
+    @JsonProperty("music_enabled")
+    private Boolean musicEnabled;
     
     @JsonProperty("duration_seconds")
     private Integer durationSeconds;
@@ -70,6 +76,8 @@ public class ReelDto {
         dto.setCaption(reel.getCaption());
         dto.setLocation(reel.getLocation());
         dto.setMusicTrack(reel.getMusicTrack());
+        dto.setFilterType(reel.getFilterType());
+        dto.setMusicEnabled(reel.getMusicEnabled());
         dto.setDurationSeconds(reel.getDurationSeconds());
         dto.setLikeCount(reel.getLikeCount());
         dto.setCommentCount(reel.getCommentCount());
@@ -100,6 +108,10 @@ public class ReelDto {
     public void setLocation(String location) { this.location = location; }
     public String getMusicTrack() { return musicTrack; }
     public void setMusicTrack(String musicTrack) { this.musicTrack = musicTrack; }
+    public String getFilterType() { return filterType; }
+    public void setFilterType(String filterType) { this.filterType = filterType; }
+    public Boolean getMusicEnabled() { return musicEnabled; }
+    public void setMusicEnabled(Boolean musicEnabled) { this.musicEnabled = musicEnabled; }
     public Integer getDurationSeconds() { return durationSeconds; }
     public void setDurationSeconds(Integer durationSeconds) { this.durationSeconds = durationSeconds; }
     public Integer getLikeCount() { return likeCount; }

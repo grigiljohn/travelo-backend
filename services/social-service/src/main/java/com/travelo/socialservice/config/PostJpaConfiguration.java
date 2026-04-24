@@ -17,7 +17,11 @@ import java.util.Properties;
 
 @Configuration
 @EnableJpaRepositories(
-        basePackages = "com.travelo.postservice.repository",
+        basePackages = {
+                "com.travelo.postservice.repository",
+                "com.travelo.planservice.repository",
+                "com.travelo.circlesservice.repository"
+        },
         entityManagerFactoryRef = "postEntityManagerFactory",
         transactionManagerRef = "postTransactionManager"
 )
@@ -30,7 +34,11 @@ public class PostJpaConfiguration {
             @Qualifier("postDataSource") DataSource dataSource) {
         LocalContainerEntityManagerFactoryBean em = new LocalContainerEntityManagerFactoryBean();
         em.setDataSource(dataSource);
-        em.setPackagesToScan("com.travelo.postservice.entity");
+        em.setPackagesToScan(
+                "com.travelo.postservice.entity",
+                "com.travelo.planservice.persistence",
+                "com.travelo.circlesservice.persistence"
+        );
         HibernateJpaVendorAdapter adapter = new HibernateJpaVendorAdapter();
         adapter.setShowSql(false);
         em.setJpaVendorAdapter(adapter);

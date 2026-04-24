@@ -25,13 +25,22 @@ public class PostController {
     private static final Logger logger = LoggerFactory.getLogger(PostController.class);
     private final PostService postService;
     private final boolean devHeaderUserFallbackEnabled;
+    /**
+     * Base URL used for post share links (deep link target the mobile /
+     * web app will resolve into an in-app post view). Configure via
+     * {@code app.share.post-base-url}. Falls back to a dev placeholder
+     * when unset so the API still returns a non-empty URL.
+     */
+    private final String shareBaseUrl;
 
     public PostController(
             PostService postService,
-            @Value("${app.dev.allow-header-user-fallback:true}") boolean devHeaderUserFallbackEnabled) {
+            @Value("${app.dev.allow-header-user-fallback:true}") boolean devHeaderUserFallbackEnabled,
+            @Value("${app.share.post-base-url:https://travelo.app/p}") String shareBaseUrl) {
         this.postService = postService;
         this.devHeaderUserFallbackEnabled = devHeaderUserFallbackEnabled;
-        logger.info("PostController initialized");
+        this.shareBaseUrl = shareBaseUrl.endsWith("/") ? shareBaseUrl.substring(0, shareBaseUrl.length() - 1) : shareBaseUrl;
+        logger.info("PostController initialized (share base URL: {})", this.shareBaseUrl);
     }
 
     /**
@@ -243,6 +252,100 @@ public class PostController {
         }
     }
 
+    /**
+     * List posts the current user has saved, most recent first.
+     * Optional {@code collection} query param filters by a specific collection name.
+     */
+    @GetMapping("/saved")
+    public ResponseEntity<ApiResponse<PageResponse<PostDto>>> listSavedPosts(
+            @RequestParam(value = "page", defaultValue = "1") int page,
+            @RequestParam(value = "limit", defaultValue = "20") @Max(100) int limit,
+            @RequestParam(value = "collection", required = false) String collection,
+            @RequestHeader(value = "X-User-Id", required = false) String headerUserId) {
+        String userId = resolveUserIdOrThrow(headerUserId, "list_saved", null);
+        if (userId == null) {
+            logger.warn("Unauthenticated attempt to list saved posts");
+            throw new com.travelo.postservice.exception.UnauthorizedException("User not authenticated");
+        }
+        try {
+            PageResponse<PostDto> saved = postService.listSavedPosts(userId, page, limit, collection);
+            logger.info("Listed saved posts - userId: {}, returned: {}, total: {}, collection: {}",
+                    userId, saved.getData() != null ? saved.getData().size() : 0,
+                    saved.getTotalPosts(), collection);
+            return ResponseEntity.ok(ApiResponse.success("Saved posts retrieved successfully", saved));
+        } catch (Exception e) {
+            logger.error("Error listing saved posts for userId: {}", userId, e);
+            throw e;
+        }
+    }
+
+    /**
+     * List posts the current user has liked, most recent like first. Used by
+     * the profile Likes tab; returns the same {@code PageResponse<PostDto>}
+     * shape as {@code /api/v1/posts/saved} so the mobile client can reuse the
+     * grid widget.
+     */
+    @GetMapping("/liked")
+    public ResponseEntity<ApiResponse<PageResponse<PostDto>>> listLikedPosts(
+            @RequestParam(value = "page", defaultValue = "1") int page,
+            @RequestParam(value = "limit", defaultValue = "20") @Max(100) int limit,
+            @RequestHeader(value = "X-User-Id", required = false) String headerUserId) {
+        String userId = resolveUserIdOrThrow(headerUserId, "list_liked", null);
+        if (userId == null) {
+            logger.warn("Unauthenticated attempt to list liked posts");
+            throw new com.travelo.postservice.exception.UnauthorizedException("User not authenticated");
+        }
+        try {
+            PageResponse<PostDto> liked = postService.listLikedPosts(userId, page, limit);
+            logger.info("Listed liked posts - userId: {}, returned: {}, total: {}",
+                    userId, liked.getData() != null ? liked.getData().size() : 0, liked.getTotalPosts());
+            return ResponseEntity.ok(ApiResponse.success("Liked posts retrieved successfully", liked));
+        } catch (Exception e) {
+            logger.error("Error listing liked posts for userId: {}", userId, e);
+            throw e;
+        }
+    }
+
+    /**
+     * Return the current user's saved-post collections (name + count + cover image).
+     * Used to render the collections strip on the mobile Saved screen.
+     */
+    @GetMapping("/saved/collections")
+    public ResponseEntity<ApiResponse<List<SavedCollectionDto>>> listSavedCollections(
+            @RequestHeader(value = "X-User-Id", required = false) String headerUserId) {
+        String userId = resolveUserIdOrThrow(headerUserId, "list_saved_collections", null);
+        if (userId == null) {
+            logger.warn("Unauthenticated attempt to list saved collections");
+            throw new com.travelo.postservice.exception.UnauthorizedException("User not authenticated");
+        }
+        try {
+            List<SavedCollectionDto> collections = postService.listSavedCollections(userId);
+            logger.info("Listed {} saved collections for userId: {}", collections.size(), userId);
+            return ResponseEntity.ok(ApiResponse.success("Saved collections retrieved successfully", collections));
+        } catch (Exception e) {
+            logger.error("Error listing saved collections for userId: {}", userId, e);
+            throw e;
+        }
+    }
+
+    /**
+     * Users who liked a post (newest first), with names/avatars from user-service when available.
+     */
+    @GetMapping("/{postId}/likes")
+    public ResponseEntity<ApiResponse<PageResponse<PostLikeUserDto>>> listPostLikers(
+            @PathVariable String postId,
+            @RequestParam(value = "page", defaultValue = "1") int page,
+            @RequestParam(value = "limit", defaultValue = "50") @Max(100) int limit) {
+        logger.debug("Listing likers for postId={}, page={}, limit={}", postId, page, limit);
+        try {
+            PageResponse<PostLikeUserDto> likers = postService.listPostLikers(postId, page, limit);
+            return ResponseEntity.ok(ApiResponse.success("Post likers retrieved successfully", likers));
+        } catch (Exception e) {
+            logger.error("Error listing likers for postId={}", postId, e);
+            throw e;
+        }
+    }
+
     @GetMapping("/{postId}")
     public ResponseEntity<ApiResponse<PostDto>> getPostById(
             @PathVariable String postId) {
@@ -357,7 +460,7 @@ public class PostController {
             PostDto post = postService.sharePost(postId);
             ShareResponse shareResponse = new ShareResponse(
                     post.getShares(),
-                    "https://your-app.com/posts/" + postId
+                    shareBaseUrl + "/" + postId
             );
             logger.info("Post shared successfully - ID: {}, total shares: {}", postId, post.getShares());
             return ResponseEntity.ok(ApiResponse.success("Post shared successfully", shareResponse));

@@ -111,8 +111,16 @@ spring:
             - Path=/shop-service/**
           filters:
             - StripPrefix=1
+        # Core platform APIs (admin, misc) — same app as analytics / AI helpers.
+        - id: platform-service
+          uri: ${PLATFORM_SERVICE_URI:http://localhost:8099}
+          predicates:
+            - Path=/platform-service/**
+          filters:
+            - StripPrefix=1
+        # Public catalog (categories/tags) + admin console APIs live in admin-service.
         - id: admin-service
-          uri: ${ADMIN_SERVICE_URI:${PLATFORM_SERVICE_URI:http://localhost:8099}}
+          uri: ${ADMIN_SERVICE_URI:http://localhost:8190}
           predicates:
             - Path=/admin-service/**
           filters:

@@ -2,24 +2,70 @@ service:
   name: media-service
   port: 8084
 
-image:
-  repository: travelo
-  tag: "latest"
+# IRSA: media-service reads/writes S3 (media + music buckets) and optionally
+# calls AWS Rekognition. Bind the SA to an IAM role with those policies.
+serviceAccount:
+  create: true
+  annotations:
+    eks.amazonaws.com/role-arn: "arn:aws:iam::REPLACE_ME:role/travelo-media-service"
 
-replicaCount: 3
+extraEnv:
+  - name: EUREKA_CLIENT_ENABLED
+    value: "false"
+  - name: SPRING_CONFIG_IMPORT
+    value: ""
+  # Reel pipeline stage tracker must be Redis in multi-replica deployments
+  # (see services/media-service ReelProgressTrackerConfig).
+  - name: REEL_PROGRESS_BACKEND
+    value: "redis"
+  - name: MEDIA_S3_ENABLED
+    value: "true"
 
+envFrom:
+  - secretRef:
+      name: travelo-media-service-secrets
+  # Expected keys: SPRING_DATASOURCE_URL / _USERNAME / _PASSWORD,
+  # SPRING_DATA_REDIS_HOST / _PORT / _PASSWORD,
+  # KAFKA_BOOTSTRAP_SERVERS, MEDIA_S3_BUCKET, MEDIA_S3_REGION, MUSIC_S3_BUCKET,
+  # MEDIA_API_PUBLIC_BASE_URL, MEDIA_S3_PUBLIC_OBJECT_BASE_URL
+
+# FFmpeg scratch dir — emptyDir so the container stays read-only-capable.
+volumes:
+  - name: ffmpeg-tmp
+    emptyDir:
+      sizeLimit: 5Gi
+volumeMounts:
+  - name: ffmpeg-tmp
+    mountPath: /tmp/travelo-reels
+
+# FFmpeg is CPU-bound; request realistic headroom.
 resources:
-  requests:
-    memory: "1Gi"
-    cpu: "1000m"
-  limits:
-    memory: "2Gi"
-    cpu: "2000m"
+  limits:   { cpu: 3000m, memory: 3Gi }
+  requests: { cpu: 1000m, memory: 1.5Gi }
 
 autoscaling:
   enabled: true
-  minReplicas: 3
-  maxReplicas: 15
-  targetCPUUtilizationPercentage: 75
-  targetMemoryUtilizationPercentage: 80
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 65
 
+# Longer startup — Hibernate validates schema + warms FFmpeg.
+probes:
+  liveness:
+    path: /actuator/health/liveness
+    initialDelaySeconds: 90
+    periodSeconds: 15
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    path: /actuator/health/readiness
+    initialDelaySeconds: 45
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  startup:
+    path: /actuator/health
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 40

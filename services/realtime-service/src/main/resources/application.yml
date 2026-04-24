@@ -87,6 +87,15 @@ app:
     secret: ${JWT_SECRET:your-256-bit-secret-key-32-bytes!!}
   user-service:
     url: ${USER_SERVICE_URL:http://localhost:8081}
+  notifications:
+    # Consumer group for the notification pipeline (shared across all topics so
+    # one pod handles each partition exactly once).
+    group: ${NOTIFICATION_CONSUMER_GROUP:notification-service-group}
+    topics:
+      post-liked: ${POST_LIKED_TOPIC:post.liked}
+      comment-created: ${COMMENT_CREATED_TOPIC:comment.created}
+      user-followed: ${USER_FOLLOWED_TOPIC:user.followed}
+      dm-received: ${DM_RECEIVED_TOPIC:dm.received}
   # WebSocket layer calls messaging REST in-process; use loopback so SecurityConfig loopback matcher applies.
   messaging:
     internal-api-base: ${APP_MESSAGING_INTERNAL_API_BASE:http://127.0.0.1:${REALTIME_SERVICE_PORT:8098}/api/v1}

@@ -2,142 +2,99 @@ package com.travelo.circlesservice.service;
 
 import com.travelo.circlesservice.dto.CommunityResponse;
 import com.travelo.circlesservice.dto.CreateCommunityRequest;
-import jakarta.annotation.PostConstruct;
+import com.travelo.circlesservice.dto.PendingJoinsResponse;
+import com.travelo.circlesservice.dto.UpdateCommunityRequest;
+import com.travelo.circlesservice.persistence.CircleCommunityEntity;
+import com.travelo.circlesservice.persistence.CircleCommunityMemberEntity;
+import com.travelo.circlesservice.persistence.CircleCommunityTagEntity;
+import com.travelo.circlesservice.persistence.MemberPk;
+import com.travelo.circlesservice.persistence.MembershipStatus;
+import com.travelo.circlesservice.repository.CircleCommunityMemberRepository;
+import com.travelo.circlesservice.repository.CircleCommunityRepository;
+import com.travelo.circlesservice.repository.CircleCommunityTagRepository;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 @Service
 public class CircleCommunityService {
 
-    private final Map<String, Community> communities = new ConcurrentHashMap<>();
+    private static final int MAX_URL_LEN = 2048;
+    private static final int MAX_RULES_LEN = 8000;
+    private static final int MAX_DESC_LEN = 4000;
+    private static final int MAX_TAGLINE_LEN = 500;
 
-    @PostConstruct
-    public void seed() {
-        put(community(
-                "g1",
-                "Munnar Weekend Travelers",
-                "Weekend escapes, tea estates, and sunrise viewpoints.",
-                List.of("Hiking", "Photography", "Weekends"),
-                "public",
-                "Kuala Lumpur",
-                setOf("alice", "bob"),
-                "system",
-                "2m ago"
-        ));
-        put(community(
-                "g2",
-                "Backpackers in KL",
-                "Cheap eats, hostels, and night-market crawls.",
-                List.of("Food", "Budget", "Social"),
-                "public",
-                "Kuala Lumpur",
-                setOf("carol"),
-                "system",
-                "15m ago"
-        ));
-        put(community(
-                "g3",
-                "Private Photo Walk",
-                "Invite-only · street photography sessions.",
-                List.of("Photo", "City"),
-                "private",
-                "Kuala Lumpur",
-                setOf("diana"),
-                "diana",
-                "1h ago"
-        ));
-    }
+    private final CircleCommunityRepository communityRepository;
+    private final CircleCommunityMemberRepository memberRepository;
+    private final CircleCommunityTagRepository tagRepository;
 
-    private static Set<String> setOf(String... xs) {
-        LinkedHashSet<String> s = new LinkedHashSet<>();
-        for (String x : xs) {
-            s.add(x);
-        }
-        return s;
-    }
-
-    private static Community community(
-            String id,
-            String name,
-            String description,
-            List<String> tags,
-            String visibility,
-            String city,
-            Set<String> memberIds,
-            String ownerId,
-            String lastActivity
+    public CircleCommunityService(
+            CircleCommunityRepository communityRepository,
+            CircleCommunityMemberRepository memberRepository,
+            CircleCommunityTagRepository tagRepository
     ) {
-        Community c = new Community();
-        c.id = id;
-        c.name = name;
-        c.description = description;
-        c.tags = new ArrayList<>(tags);
-        c.visibility = normalizeVis(visibility);
-        c.city = city;
-        c.memberIds = new LinkedHashSet<>(memberIds);
-        c.ownerId = ownerId;
-        c.lastActivity = lastActivity;
-        return c;
+        this.communityRepository = communityRepository;
+        this.memberRepository = memberRepository;
+        this.tagRepository = tagRepository;
     }
 
-    private void put(Community c) {
-        communities.put(c.id, c);
-    }
-
-    private static String normalizeVis(String v) {
-        if (v == null) {
-            return "public";
-        }
-        String x = v.trim().toLowerCase(Locale.ROOT);
-        return "private".equals(x) ? "private" : "public";
-    }
-
+    @Transactional(readOnly = true)
     public List<CommunityResponse> list(String city, String currentUserId) {
         String user = blankToGuest(currentUserId);
-        return communities.values().stream()
-                .filter(c -> visibleTo(c, user))
-                .sorted(Comparator.comparing((Community c) -> !c.memberIds.contains(user))
-                        .thenComparing(c -> c.name))
-                .map(c -> toDto(c, user))
-                .collect(Collectors.toList());
-    }
-
-    private boolean visibleTo(Community c, String user) {
-        if ("public".equals(c.visibility)) {
-            return true;
+        List<CircleCommunityEntity> accessible = communityRepository.findAccessibleForUser(user);
+        if (accessible.isEmpty()) {
+            return List.of();
         }
-        return c.ownerId.equals(user) || c.memberIds.contains(user);
+        List<String> ids = accessible.stream().map(CircleCommunityEntity::getId).toList();
+        Set<String> memberOf = new HashSet<>(memberRepository.findCommunityIdsContainingUser(user, ids));
+        Map<String, List<String>> tagsByCommunity = loadTagsByCommunityIds(ids);
+
+        List<CommunityResponse> all = accessible.stream()
+                .sorted(Comparator
+                        .comparing((CircleCommunityEntity c) -> !memberOf.contains(c.getId()))
+                        .thenComparing(CircleCommunityEntity::getName, String.CASE_INSENSITIVE_ORDER))
+                .map(c -> toDto(c, tagsByCommunity.getOrDefault(c.getId(), List.of()), user))
+                .collect(Collectors.toList());
+
+        if (city == null || city.isBlank()) {
+            return all;
+        }
+        String q = city.trim();
+        if ("nearby".equalsIgnoreCase(q)) {
+            return all;
+        }
+        List<CommunityResponse> narrowed = all.stream()
+                .filter(d -> matchesCityQuery(q, d.getCity()))
+                .collect(Collectors.toList());
+        if (!narrowed.isEmpty()) {
+            return narrowed;
+        }
+        return all;
     }
 
+    @Transactional
     public CommunityResponse create(CreateCommunityRequest req, String ownerId) {
         String user = blankToGuest(ownerId);
         if (req.getName() == null || req.getName().trim().isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "name required");
         }
         String id = "c_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
-        Community c = new Community();
-        c.id = id;
-        c.name = req.getName().trim();
-        c.description = req.getDescription() == null ? "" : req.getDescription().trim();
-        c.tags = req.getTags() == null ? new ArrayList<>() : new ArrayList<>(req.getTags());
-        c.visibility = normalizeVis(req.getVisibility());
-        c.city = req.getCity() == null ? "" : req.getCity().trim();
-        c.memberIds = new LinkedHashSet<>();
-        c.memberIds.add(user);
-        c.ownerId = user;
-        c.lastActivity = "Just now";
+
+        LinkedHashSet<String> memberUsers = new LinkedHashSet<>();
+        memberUsers.add(user);
         if (req.getInviteUserIds() != null) {
             for (String invitee : req.getInviteUserIds()) {
                 if (invitee == null) {
@@ -147,37 +104,330 @@ public class CircleCommunityService {
                 if (x.isEmpty() || x.equals(user)) {
                     continue;
                 }
-                c.memberIds.add(x);
+                memberUsers.add(x);
             }
         }
-        communities.put(id, c);
-        return toDto(c, user);
+
+        CircleCommunityEntity c = new CircleCommunityEntity();
+        c.setId(id);
+        c.setName(req.getName().trim());
+        c.setDescription(clamp(req.getDescription() == null ? "" : req.getDescription().trim(), MAX_DESC_LEN));
+        c.setTagline(clamp(req.getTagline() == null ? "" : req.getTagline().trim(), MAX_TAGLINE_LEN));
+        c.setCity(req.getCity() == null ? "" : req.getCity().trim());
+        c.setVisibility(normalizeVis(req.getVisibility()));
+        c.setOwnerUserId(user);
+        c.setMemberCount(memberUsers.size());
+        c.setLastActivityLabel("Just now");
+        c.setRulesText(clamp(req.getRules() == null ? "" : req.getRules().trim(), MAX_RULES_LEN));
+        c.setTopics(normalizeTopicList(req.getTopics()));
+        c.setCoverImageUrl(clampUrl(req.getCoverImageUrl()));
+        c.setIconImageUrl(clampUrl(req.getIconImageUrl()));
+        if (Boolean.TRUE.equals(req.getRequireAdminApproval())) {
+            c.setRequireAdminApproval(true);
+        }
+        if (Boolean.FALSE.equals(req.getAllowMemberInvites())) {
+            c.setAllowMemberInvites(false);
+        } else {
+            c.setAllowMemberInvites(true);
+        }
+        communityRepository.save(c);
+
+        for (String uid : memberUsers) {
+            CircleCommunityMemberEntity row = new CircleCommunityMemberEntity();
+            row.setCommunityId(id);
+            row.setUserId(uid);
+            row.setMembershipStatus(MembershipStatus.ACTIVE);
+            row.setRole(uid.equals(user) ? "OWNER" : "MEMBER");
+            memberRepository.save(row);
+        }
+        if (req.getTags() != null) {
+            LinkedHashSet<String> seen = new LinkedHashSet<>();
+            for (String tag : req.getTags()) {
+                if (tag == null) {
+                    continue;
+                }
+                String t = tag.trim();
+                if (t.isEmpty() || t.length() > 48 || !seen.add(t)) {
+                    continue;
+                }
+                CircleCommunityTagEntity te = new CircleCommunityTagEntity();
+                te.setCommunityId(id);
+                te.setTag(t);
+                tagRepository.save(te);
+            }
+        }
+        return get(id, ownerId);
     }
 
+    @Transactional
     public CommunityResponse join(String id, String userId) {
         String user = blankToGuest(userId);
-        Community c = communities.get(id);
-        if (c == null) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "community not found");
-        }
+        CircleCommunityEntity c = communityRepository.findById(id).orElseThrow(() -> notFound());
         if (!visibleTo(c, user)) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "community not found");
+            throw notFound();
         }
-        c.memberIds.add(user);
-        c.lastActivity = "Just now";
-        return toDto(c, user);
+        if (memberRepository.existsByCommunityIdAndUserIdAndMembershipStatus(id, user, MembershipStatus.ACTIVE)) {
+            return get(id, userId);
+        }
+        if (memberRepository.existsByCommunityIdAndUserIdAndMembershipStatus(id, user, MembershipStatus.PENDING)) {
+            return get(id, userId);
+        }
+        String vis = visKey(c.getVisibility());
+        if (!"public".equals(vis)) {
+            throw notFound();
+        }
+        CircleCommunityMemberEntity row = new CircleCommunityMemberEntity();
+        row.setCommunityId(id);
+        row.setUserId(user);
+        row.setRole("MEMBER");
+        if (c.isRequireAdminApproval()) {
+            row.setMembershipStatus(MembershipStatus.PENDING);
+            memberRepository.save(row);
+        } else {
+            row.setMembershipStatus(MembershipStatus.ACTIVE);
+            memberRepository.save(row);
+            communityRepository.incrementMemberCount(id, "Just now");
+        }
+        return get(id, userId);
     }
 
+    @Transactional
+    public CommunityResponse cancelPendingJoin(String id, String userId) {
+        String user = blankToGuest(userId);
+        CircleCommunityEntity c = communityRepository.findById(id).orElseThrow(() -> notFound());
+        if (!visibleTo(c, user)) {
+            throw notFound();
+        }
+        if (!memberRepository.existsByCommunityIdAndUserIdAndMembershipStatus(id, user, MembershipStatus.PENDING)) {
+            return get(id, userId);
+        }
+        memberRepository.deleteById(new MemberPk(id, user));
+        return get(id, userId);
+    }
+
+    @Transactional(readOnly = true)
+    public PendingJoinsResponse listPendingJoins(String id, String ownerUserId) {
+        String owner = blankToGuest(ownerUserId);
+        CircleCommunityEntity c = communityRepository.findById(id).orElseThrow(() -> notFound());
+        assertOwner(c, owner);
+        return new PendingJoinsResponse(memberRepository.findPendingUserIds(id));
+    }
+
+    @Transactional
+    public CommunityResponse approveJoinRequest(String id, String targetUserId, String ownerUserId) {
+        String owner = blankToGuest(ownerUserId);
+        CircleCommunityEntity c = communityRepository.findById(id).orElseThrow(() -> notFound());
+        assertOwner(c, owner);
+        String target = targetUserId == null ? "" : targetUserId.trim();
+        if (target.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "userId required");
+        }
+        CircleCommunityMemberEntity row = memberRepository.findById(new MemberPk(id, target)).orElseThrow(() -> notFound());
+        if (row.getMembershipStatus() != MembershipStatus.PENDING) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "no pending request for user");
+        }
+        row.setMembershipStatus(MembershipStatus.ACTIVE);
+        memberRepository.save(row);
+        communityRepository.incrementMemberCount(id, "Just now");
+        return get(id, ownerUserId);
+    }
+
+    @Transactional
+    public CommunityResponse rejectJoinRequest(String id, String targetUserId, String ownerUserId) {
+        String owner = blankToGuest(ownerUserId);
+        CircleCommunityEntity c = communityRepository.findById(id).orElseThrow(() -> notFound());
+        assertOwner(c, owner);
+        String target = targetUserId == null ? "" : targetUserId.trim();
+        if (target.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "userId required");
+        }
+        CircleCommunityMemberEntity row = memberRepository.findById(new MemberPk(id, target)).orElseThrow(() -> notFound());
+        if (row.getMembershipStatus() != MembershipStatus.PENDING) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "no pending request for user");
+        }
+        memberRepository.delete(row);
+        return get(id, ownerUserId);
+    }
+
+    @Transactional
+    public CommunityResponse update(String id, UpdateCommunityRequest req, String userId) {
+        String user = blankToGuest(userId);
+        CircleCommunityEntity c = communityRepository.findById(id).orElseThrow(() -> notFound());
+        assertOwner(c, user);
+
+        if (req.getName() != null) {
+            String n = req.getName().trim();
+            if (n.isEmpty()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "name cannot be empty");
+            }
+            c.setName(n.length() > 200 ? n.substring(0, 200) : n);
+        }
+        if (req.getDescription() != null) {
+            c.setDescription(clamp(req.getDescription().trim(), MAX_DESC_LEN));
+        }
+        if (req.getTagline() != null) {
+            c.setTagline(clamp(req.getTagline().trim(), MAX_TAGLINE_LEN));
+        }
+        if (req.getCity() != null) {
+            c.setCity(req.getCity().trim());
+        }
+        if (req.getVisibility() != null) {
+            c.setVisibility(normalizeVis(req.getVisibility()));
+        }
+        if (req.getRules() != null) {
+            c.setRulesText(clamp(req.getRules().trim(), MAX_RULES_LEN));
+        }
+        if (req.getTopics() != null) {
+            c.setTopics(normalizeTopicList(req.getTopics()));
+        }
+        if (req.getCoverImageUrl() != null) {
+            String u = req.getCoverImageUrl().trim();
+            c.setCoverImageUrl(u.isEmpty() ? null : clampUrl(u));
+        }
+        if (req.getIconImageUrl() != null) {
+            String u = req.getIconImageUrl().trim();
+            c.setIconImageUrl(u.isEmpty() ? null : clampUrl(u));
+        }
+        if (req.getRequireAdminApproval() != null) {
+            c.setRequireAdminApproval(req.getRequireAdminApproval());
+        }
+        if (req.getAllowMemberInvites() != null) {
+            c.setAllowMemberInvites(req.getAllowMemberInvites());
+        }
+        if (req.getTags() != null) {
+            tagRepository.deleteByCommunityId(id);
+            LinkedHashSet<String> seen = new LinkedHashSet<>();
+            for (String tag : req.getTags()) {
+                if (tag == null) {
+                    continue;
+                }
+                String t = tag.trim();
+                if (t.isEmpty() || t.length() > 48 || !seen.add(t)) {
+                    continue;
+                }
+                CircleCommunityTagEntity te = new CircleCommunityTagEntity();
+                te.setCommunityId(id);
+                te.setTag(t);
+                tagRepository.save(te);
+            }
+        }
+        communityRepository.save(c);
+        return get(id, userId);
+    }
+
+    @Transactional(readOnly = true)
     public CommunityResponse get(String id, String userId) {
         String user = blankToGuest(userId);
-        Community c = communities.get(id);
-        if (c == null) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "community not found");
-        }
+        CircleCommunityEntity c = communityRepository.findById(id).orElseThrow(() -> notFound());
         if (!visibleTo(c, user)) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "community not found");
+            throw notFound();
         }
-        return toDto(c, user);
+        List<String> tags = tagRepository.findByCommunityIdInOrderByTagAsc(List.of(id)).stream()
+                .map(CircleCommunityTagEntity::getTag)
+                .collect(Collectors.toList());
+        return toDto(c, tags, user);
+    }
+
+    private Map<String, List<String>> loadTagsByCommunityIds(List<String> ids) {
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        List<CircleCommunityTagEntity> rows = tagRepository.findByCommunityIdInOrderByTagAsc(ids);
+        Map<String, List<String>> map = new LinkedHashMap<>();
+        for (CircleCommunityTagEntity t : rows) {
+            map.computeIfAbsent(t.getCommunityId(), k -> new ArrayList<>()).add(t.getTag());
+        }
+        return map;
+    }
+
+    private CommunityResponse toDto(CircleCommunityEntity c, List<String> tags, String user) {
+        boolean activeMember = memberRepository.existsByCommunityIdAndUserIdAndMembershipStatus(
+                c.getId(), user, MembershipStatus.ACTIVE);
+        boolean pending = memberRepository.existsByCommunityIdAndUserIdAndMembershipStatus(
+                c.getId(), user, MembershipStatus.PENDING);
+        boolean owner = c.getOwnerUserId().equals(user);
+        CommunityResponse r = new CommunityResponse();
+        r.setId(c.getId());
+        r.setName(c.getName());
+        r.setDescription(c.getDescription());
+        r.setTagline(c.getTagline() != null ? c.getTagline() : "");
+        r.setTags(tags);
+        r.setTopics(c.getTopics() != null ? List.copyOf(c.getTopics()) : List.of());
+        r.setRules(c.getRulesText() != null ? c.getRulesText() : "");
+        r.setCoverImageUrl(c.getCoverImageUrl());
+        r.setIconImageUrl(c.getIconImageUrl());
+        r.setVisibility(c.getVisibility());
+        r.setCity(c.getCity());
+        r.setMemberCount(c.getMemberCount());
+        r.setLastActivity(c.getLastActivityLabel());
+        r.setMember(activeMember);
+        r.setOwner(owner);
+        r.setPendingJoinRequest(pending && !activeMember);
+        r.setRequireAdminApproval(c.isRequireAdminApproval());
+        r.setAllowMemberInvites(c.isAllowMemberInvites());
+        return r;
+    }
+
+    private boolean visibleTo(CircleCommunityEntity c, String user) {
+        String vis = visKey(c.getVisibility());
+        if ("public".equals(vis)) {
+            return true;
+        }
+        if (c.getOwnerUserId().equals(user)) {
+            return true;
+        }
+        return memberRepository.existsByCommunityIdAndUserIdAndMembershipStatus(c.getId(), user, MembershipStatus.ACTIVE);
+    }
+
+    private void assertOwner(CircleCommunityEntity c, String user) {
+        if (!c.getOwnerUserId().equals(user)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "owner only");
+        }
+    }
+
+    private static List<String> normalizeTopicList(List<String> raw) {
+        if (raw == null || raw.isEmpty()) {
+            return new ArrayList<>();
+        }
+        LinkedHashSet<String> seen = new LinkedHashSet<>();
+        for (String s : raw) {
+            if (s == null) {
+                continue;
+            }
+            String t = s.trim();
+            if (t.isEmpty() || t.length() > 80) {
+                continue;
+            }
+            seen.add(t);
+        }
+        return new ArrayList<>(seen);
+    }
+
+    private static String clamp(String s, int max) {
+        if (s.length() <= max) {
+            return s;
+        }
+        return s.substring(0, max);
+    }
+
+    private static String clampUrl(String url) {
+        if (url == null || url.isBlank()) {
+            return null;
+        }
+        String u = url.trim();
+        if (u.length() > MAX_URL_LEN) {
+            return u.substring(0, MAX_URL_LEN);
+        }
+        return u;
+    }
+
+    private static boolean matchesCityQuery(String requested, String communityCity) {
+        if (communityCity == null || communityCity.isBlank()) {
+            return true;
+        }
+        String a = requested.trim().toLowerCase(Locale.ROOT);
+        String b = communityCity.trim().toLowerCase(Locale.ROOT);
+        return a.contains(b) || b.contains(a);
     }
 
     private static String blankToGuest(String id) {
@@ -187,30 +437,28 @@ public class CircleCommunityService {
         return id.trim();
     }
 
-    private static CommunityResponse toDto(Community c, String user) {
-        return CommunityResponse.of(
-                c.id,
-                c.name,
-                c.description,
-                c.tags,
-                c.visibility,
-                c.city,
-                c.memberIds.size(),
-                c.lastActivity,
-                c.memberIds.contains(user),
-                c.ownerId.equals(user)
-        );
+    private static String normalizeVis(String v) {
+        if (v == null) {
+            return "public";
+        }
+        String x = v.trim().toLowerCase(Locale.ROOT);
+        if ("secret".equals(x)) {
+            return "secret";
+        }
+        if ("private".equals(x)) {
+            return "private";
+        }
+        return "public";
     }
 
-    private static final class Community {
-        String id;
-        String name;
-        String description;
-        List<String> tags;
-        String visibility;
-        String city;
-        Set<String> memberIds;
-        String ownerId;
-        String lastActivity;
+    private static String visKey(String v) {
+        if (v == null) {
+            return "public";
+        }
+        return v.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private static ResponseStatusException notFound() {
+        return new ResponseStatusException(HttpStatus.NOT_FOUND, "community not found");
     }
 }

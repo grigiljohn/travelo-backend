@@ -25,8 +25,10 @@ public class OpenApiConfig {
                         .description("""
                                 Combined deployable for admin, analytics, AI orchestration, and gateway helpers.
                                 Clients should keep using API gateway path prefixes:
-                                `/admin-service`, `/analytics-service`, `/gateway-helpers`, `/ai-orchestrator-service`.
-                                
+                                `/platform-service`, `/analytics-service`, `/gateway-helpers`, `/ai-orchestrator-service`.
+                                The legacy `/admin-service` prefix has been retired — route admin
+                                calls through `/platform-service/**`.
+
                                 **Direct base URL:** `http://localhost:%d`
                                 """.formatted(port))
                         .version("v1")
@@ -41,8 +43,8 @@ public class OpenApiConfig {
                                 .url("http://localhost:" + port)
                                 .description("Direct (development)"),
                         new Server()
-                                .url("http://api.travelo.com:8080/admin-service")
-                                .description("Gateway → admin prefix"),
+                                .url("http://api.travelo.com:8080/platform-service")
+                                .description("Gateway → platform-service prefix"),
                         new Server()
                                 .url("http://api.travelo.com:8080/analytics-service")
                                 .description("Gateway → analytics prefix"),

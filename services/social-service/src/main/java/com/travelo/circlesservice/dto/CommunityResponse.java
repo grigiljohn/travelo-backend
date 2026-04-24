@@ -10,38 +10,84 @@ public class CommunityResponse {
     private String id;
     private String name;
     private String description;
+    private String tagline;
     private List<String> tags;
+    private List<String> topics;
+    private String rules;
+    private String coverImageUrl;
+    private String iconImageUrl;
     private String visibility;
     private String city;
     private int memberCount;
     private String lastActivity;
     private boolean member;
     private boolean owner;
+    private boolean pendingJoinRequest;
+    private boolean requireAdminApproval;
+    private boolean allowMemberInvites;
 
-    public static CommunityResponse of(
-            String id,
-            String name,
-            String description,
-            List<String> tags,
-            String visibility,
-            String city,
-            int memberCount,
-            String lastActivity,
-            boolean member,
-            boolean owner
-    ) {
-        CommunityResponse r = new CommunityResponse();
-        r.setId(id);
-        r.setName(name);
-        r.setDescription(description);
-        r.setTags(tags);
-        r.setVisibility(visibility);
-        r.setCity(city);
-        r.setMemberCount(memberCount);
-        r.setLastActivity(lastActivity);
-        r.setMember(member);
-        r.setOwner(owner);
-        return r;
+    public String getTagline() {
+        return tagline;
+    }
+
+    public void setTagline(String tagline) {
+        this.tagline = tagline;
+    }
+
+    public List<String> getTopics() {
+        return topics;
+    }
+
+    public void setTopics(List<String> topics) {
+        this.topics = topics;
+    }
+
+    public String getRules() {
+        return rules;
+    }
+
+    public void setRules(String rules) {
+        this.rules = rules;
+    }
+
+    public String getCoverImageUrl() {
+        return coverImageUrl;
+    }
+
+    public void setCoverImageUrl(String coverImageUrl) {
+        this.coverImageUrl = coverImageUrl;
+    }
+
+    public String getIconImageUrl() {
+        return iconImageUrl;
+    }
+
+    public void setIconImageUrl(String iconImageUrl) {
+        this.iconImageUrl = iconImageUrl;
+    }
+
+    public boolean isPendingJoinRequest() {
+        return pendingJoinRequest;
+    }
+
+    public void setPendingJoinRequest(boolean pendingJoinRequest) {
+        this.pendingJoinRequest = pendingJoinRequest;
+    }
+
+    public boolean isRequireAdminApproval() {
+        return requireAdminApproval;
+    }
+
+    public void setRequireAdminApproval(boolean requireAdminApproval) {
+        this.requireAdminApproval = requireAdminApproval;
+    }
+
+    public boolean isAllowMemberInvites() {
+        return allowMemberInvites;
+    }
+
+    public void setAllowMemberInvites(boolean allowMemberInvites) {
+        this.allowMemberInvites = allowMemberInvites;
     }
 
     public String getId() {

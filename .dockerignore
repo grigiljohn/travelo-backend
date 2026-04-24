@@ -1,0 +1,45 @@
+# Build artefacts
+**/target/
+**/build/
+**/out/
+**/.gradle/
+**/.mvn/wrapper/maven-wrapper.jar
+
+# IDE
+.idea/
+.vscode/
+*.iml
+.project
+.classpath
+.settings/
+
+# Logs
+*.log
+**/logs/
+build.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git / CI
+.git/
+.github/
+.gitignore
+.gitattributes
+
+# Docker / K8s (not needed inside the image)
+infra/
+.env
+.env.*
+docker-compose*.yml
+**/*.md
+
+# Local test resources / dev uploads
+uploads/
+test-postgres-connection.ps1
+performance-tests/
+contract-tests/
+docs/
+
+# Keep config/registry/services/libs/packages/pom.xml — those ARE the build
