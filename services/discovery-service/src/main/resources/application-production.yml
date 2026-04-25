@@ -1,3 +1,13 @@
+# Production — set SPRING_CONFIG_IMPORT, EUREKA_CLIENT_SERVICEURL_DEFAULTZONE, and secrets in the deployment
+spring:
+  config:
+    import: ${SPRING_CONFIG_IMPORT:optional:configserver:http://localhost:8888}
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:http://localhost:8761/eureka/}
+
 # Production configuration for discovery-service
 
 management:

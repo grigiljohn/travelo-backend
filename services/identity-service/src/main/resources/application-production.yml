@@ -1,0 +1,24 @@
+# Profile: production
+spring:
+  config:
+    import: ${SPRING_CONFIG_IMPORT:optional:configserver:http://localhost:8888}
+  jpa:
+    show-sql: false
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:http://localhost:8761/eureka/}
+management:
+  endpoint:
+    health:
+      show-details: when-authorized
+  metrics:
+    tags:
+      service: identity-service
+      environment: production
+app:
+  otp:
+    use-default-otp: false
+logging:
+  level:
+    org.springframework.security: WARN

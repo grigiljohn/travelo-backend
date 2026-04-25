@@ -1,0 +1,13 @@
+# Profile: stage — S3, Redis, Kafka, DATABASE from SSM
+spring:
+  config:
+    import: ${SPRING_CONFIG_IMPORT:optional:configserver:http://localhost:8888}
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:http://localhost:8761/eureka/}
+management:
+  metrics:
+    tags:
+      service: media-service
+      environment: stage

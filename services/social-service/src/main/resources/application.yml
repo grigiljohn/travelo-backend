@@ -4,6 +4,8 @@ server:
 spring:
   application:
     name: social-service
+  profiles:
+    default: dev
   config:
     import: optional:configserver:http://localhost:8888
   lifecycle:

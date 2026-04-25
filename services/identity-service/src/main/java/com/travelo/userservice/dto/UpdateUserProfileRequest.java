@@ -21,6 +21,9 @@ public class UpdateUserProfileRequest {
     
     @JsonProperty("is_private")
     private Boolean isPrivate;
+    
+    @JsonProperty("location_permission_granted")
+    private Boolean locationPermissionGranted;
 
     // Getters and Setters
     public String getName() { return name; }
@@ -37,5 +40,7 @@ public class UpdateUserProfileRequest {
     public void setPhone(String phone) { this.phone = phone; }
     public Boolean getIsPrivate() { return isPrivate; }
     public void setIsPrivate(Boolean isPrivate) { this.isPrivate = isPrivate; }
+    public Boolean getLocationPermissionGranted() { return locationPermissionGranted; }
+    public void setLocationPermissionGranted(Boolean locationPermissionGranted) { this.locationPermissionGranted = locationPermissionGranted; }
 }
 

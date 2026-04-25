@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -566,9 +567,10 @@ public class PostServiceImpl implements PostService {
 
     @Override
     @Transactional(readOnly = true)
-    public PageResponse<PostDto> getPosts(int page, int limit, String mood, List<String> authorUserIds) {
-        logger.debug("Getting posts - page: {}, limit: {}, mood: {}, authorFilter={}",
-                page, limit, mood, authorUserIds != null ? authorUserIds.size() : 0);
+    public PageResponse<PostDto> getPosts(
+            int page, int limit, String mood, List<String> authorUserIds, String viewerUserId) {
+        logger.debug("Getting posts - page: {}, limit: {}, mood: {}, authorFilter={}, viewer={}",
+                page, limit, mood, authorUserIds != null ? authorUserIds.size() : 0, viewerUserId);
 
         long totalPosts = postRepository.count();
         long nonDeletedPosts = postRepository.countByDeletedAtIsNull();
@@ -605,7 +607,7 @@ public class PostServiceImpl implements PostService {
         logger.debug("Found {} posts (total: {}, pages: {})",
                 postPage.getContent().size(), postPage.getTotalElements(), postPage.getTotalPages());
 
-        List<PostDto> enrichedPosts = enrichPostsWithUserData(postPage.getContent());
+        List<PostDto> enrichedPosts = enrichPostsWithUserData(postPage.getContent(), viewerUserId);
 
         logger.info("Retrieved {} posts (page: {}, limit: {})",
                 enrichedPosts.size(), page, limit);
@@ -620,12 +622,91 @@ public class PostServiceImpl implements PostService {
                 .build();
     }
 
-    private List<PostDto> enrichPostsWithUserData(List<Post> posts) {
-        logger.debug("Enriching {} posts with user data", posts.size());
+    private void applyViewerEngagementFlags(PostDto dto, String viewerUserId) {
+        if (dto == null) {
+            return;
+        }
+        if (viewerUserId == null || viewerUserId.isBlank()) {
+            dto.setIsLiked(false);
+            dto.setIsSaved(false);
+            dto.setIsDreamed(false);
+            dto.setIsFollowing(false);
+            return;
+        }
+        String postId = dto.getId();
+        if (postId == null || postId.isEmpty()) {
+            return;
+        }
+        dto.setIsLiked(likeRepository.existsByUserIdAndPostId(viewerUserId, postId));
+        dto.setIsSaved(savedPostRepository
+                .findByUserIdAndPostIdAndCollectionName(viewerUserId, postId, "All Posts")
+                .isPresent());
+        dto.setIsDreamed(savedPostRepository
+                .findByUserIdAndPostIdAndCollectionName(viewerUserId, postId, "Dream")
+                .isPresent());
+        dto.setIsFollowing(false);
+    }
+
+    private List<PostDto> enrichPostsWithUserData(List<Post> posts, String viewerUserId) {
+        logger.debug("Enriching {} posts with user data, viewerId={}", posts.size(), viewerUserId);
+        final String viewer = (viewerUserId == null || viewerUserId.isBlank()) ? null : viewerUserId.trim();
+        if (viewer == null) {
+            return posts.stream()
+                    .map(post -> {
+                        PostDto dto = PostDto.fromEntity(post, mediaServiceClient);
+                        if (post.getUserId() != null && !post.getUserId().isEmpty()) {
+                            try {
+                                populateUserInfo(dto, UUID.fromString(post.getUserId()));
+                                logger.debug("Enriched post {} with user info: username={}, userId={}", 
+                                        post.getId(), dto.getUsername(), post.getUserId());
+                            } catch (IllegalArgumentException e) {
+                                logger.warn("Invalid userId format for post {}: {}", post.getId(), post.getUserId());
+                                dto.setUsername("Unknown User");
+                                dto.setUserAvatar("");
+                            }
+                        } else {
+                            logger.warn("Post {} has null or empty userId", post.getId());
+                            dto.setUsername("Unknown User");
+                            dto.setUserAvatar("");
+                        }
+                        if (dto.getUsername() == null || dto.getUsername().isEmpty()) {
+                            dto.setUsername("Unknown User");
+                        }
+                        applyViewerEngagementFlags(dto, null);
+                        return dto;
+                    })
+                    .collect(Collectors.toList());
+        }
+        final List<String> postIds = posts.stream().map(Post::getId).toList();
+        final Set<String> likedIds;
+        if (postIds.isEmpty()) {
+            likedIds = Set.of();
+        } else {
+            likedIds = likeRepository.findByUserIdAndPostIdIn(viewer, postIds).stream()
+                    .map(Like::getPostId)
+                    .collect(Collectors.toSet());
+        }
+        final Set<String> savedAllIds;
+        if (postIds.isEmpty()) {
+            savedAllIds = Set.of();
+        } else {
+            savedAllIds = savedPostRepository
+                    .findByUserIdAndPostIdInAndCollectionName(viewer, postIds, "All Posts").stream()
+                    .map(SavedPost::getPostId)
+                    .collect(Collectors.toSet());
+        }
+        final Set<String> dreamIds;
+        if (postIds.isEmpty()) {
+            dreamIds = Set.of();
+        } else {
+            dreamIds = savedPostRepository
+                    .findByUserIdAndPostIdInAndCollectionName(viewer, postIds, "Dream").stream()
+                    .map(SavedPost::getPostId)
+                    .collect(Collectors.toSet());
+        }
         return posts.stream()
                 .map(post -> {
                     PostDto dto = PostDto.fromEntity(post, mediaServiceClient);
-                    // Populate user info from user service
                     if (post.getUserId() != null && !post.getUserId().isEmpty()) {
                         try {
                             populateUserInfo(dto, UUID.fromString(post.getUserId()));
@@ -641,14 +722,14 @@ public class PostServiceImpl implements PostService {
                         dto.setUsername("Unknown User");
                         dto.setUserAvatar("");
                     }
-                    // Ensure username is never null
                     if (dto.getUsername() == null || dto.getUsername().isEmpty()) {
                         dto.setUsername("Unknown User");
                     }
-                    // Set default values - will be implemented with authentication later
-                    dto.setIsLiked(false);
+                    String pid = post.getId();
+                    dto.setIsLiked(likedIds.contains(pid));
+                    dto.setIsSaved(savedAllIds.contains(pid));
+                    dto.setIsDreamed(dreamIds.contains(pid));
                     dto.setIsFollowing(false);
-                    dto.setIsSaved(false);
                     return dto;
                 })
                 .collect(Collectors.toList());
@@ -656,8 +737,8 @@ public class PostServiceImpl implements PostService {
 
     @Override
     @Transactional(readOnly = true)
-    public PostDto getPostById(String postId) {
-        logger.debug("Getting post by ID: {}", postId);
+    public PostDto getPostByIdForViewer(String postId, String viewerUserId) {
+        logger.debug("Getting post by ID: {}, viewer={}", postId, viewerUserId);
         Post post = postRepository.findByIdAndDeletedAtIsNull(postId)
                 .orElseThrow(() -> {
                     logger.warn("Post not found - ID: {}", postId);
@@ -678,10 +759,7 @@ public class PostServiceImpl implements PostService {
             dto.setUsername("Unknown User");
             dto.setUserAvatar("");
         }
-        // Set default values - will be implemented with authentication later
-        dto.setIsLiked(false);
-        dto.setIsFollowing(false);
-        dto.setIsSaved(false);
+        applyViewerEngagementFlags(dto, viewerUserId);
 
         logger.info("Retrieved post - ID: {}", postId);
         return dto;
@@ -833,9 +911,7 @@ public class PostServiceImpl implements PostService {
             dto.setUsername("Unknown User");
             dto.setUserAvatar("");
         }
-        dto.setIsLiked(liked);
-        dto.setIsFollowing(false);
-        dto.setIsSaved(false);
+        applyViewerEngagementFlags(dto, userId);
 
         return dto;
     }
@@ -895,42 +971,24 @@ public class PostServiceImpl implements PostService {
                     return new PostNotFoundException(postId);
                 });
 
-        String collectionName = request != null && request.collectionName() != null 
-                ? request.collectionName() 
+        String collectionName = request != null
+                && request.collectionName() != null
+                && !request.collectionName().isBlank()
+                ? request.collectionName().trim()
                 : "All Posts";
 
-        // Check if post is already saved
-        boolean isSaved = savedPostRepository.existsByUserIdAndPostId(userId, postId);
-        
-        if (isSaved) {
-            // Unsave: Delete the saved post entry
-            savedPostRepository.findByUserIdAndPostIdAndCollectionName(userId, postId, collectionName)
-                    .ifPresentOrElse(
-                            savedPost -> {
-                                savedPostRepository.delete(savedPost);
-                                logger.info("Post unsaved - postId: {}, userId: {}, collectionName: {}", 
-                                        postId, userId, collectionName);
-                            },
-                            () -> {
-                                // If not found in specific collection, try to delete from any collection
-                                savedPostRepository.findByUserIdAndPostIdAndCollectionName(userId, postId, "All Posts")
-                                        .ifPresent(savedPost -> {
-                                            savedPostRepository.delete(savedPost);
-                                            logger.info("Post unsaved from default collection - postId: {}, userId: {}", 
-                                                    postId, userId);
-                                        });
-                            }
-                    );
+        var inCollection = savedPostRepository.findByUserIdAndPostIdAndCollectionName(userId, postId, collectionName);
+        if (inCollection.isPresent()) {
+            savedPostRepository.delete(inCollection.get());
+            logger.info("Post removed from collection - postId: {}, userId: {}, collection: {}",
+                    postId, userId, collectionName);
         } else {
-            // Save: Create new saved post entry
-            SavedPost savedPost = new SavedPost(userId, postId, collectionName);
-            savedPostRepository.save(savedPost);
-            logger.info("Post saved - postId: {}, userId: {}, collectionName: {}", 
+            savedPostRepository.save(new SavedPost(userId, postId, collectionName));
+            logger.info("Post added to collection - postId: {}, userId: {}, collection: {}",
                     postId, userId, collectionName);
         }
 
         PostDto dto = PostDto.fromEntity(post, mediaServiceClient);
-        // Populate user info from user service
         if (post.getUserId() != null) {
             try {
                 populateUserInfo(dto, UUID.fromString(post.getUserId()));
@@ -943,9 +1001,7 @@ public class PostServiceImpl implements PostService {
             dto.setUsername("Unknown User");
             dto.setUserAvatar("");
         }
-        dto.setIsLiked(false);
-        dto.setIsFollowing(false);
-        dto.setIsSaved(!isSaved); // Toggle: if it was saved, now it's unsaved (false), and vice versa
+        applyViewerEngagementFlags(dto, userId);
 
         return dto;
     }
@@ -992,7 +1048,7 @@ public class PostServiceImpl implements PostService {
             if (p != null) orderedPosts.add(p);
         }
 
-        List<PostDto> enriched = enrichPostsWithUserData(orderedPosts);
+        List<PostDto> enriched = enrichPostsWithUserData(orderedPosts, null);
         // Every item in this response is, by definition, saved by the viewer. Surface
         // the collection name so the mobile client can render grouping chips without
         // a second round-trip.
@@ -1093,7 +1149,7 @@ public class PostServiceImpl implements PostService {
             if (p != null) orderedPosts.add(p);
         }
 
-        List<PostDto> enriched = enrichPostsWithUserData(orderedPosts);
+        List<PostDto> enriched = enrichPostsWithUserData(orderedPosts, null);
         // Every item in this response is, by definition, liked by the viewer.
         // Pre-set the flag so the mobile client doesn't need to reconcile.
         for (PostDto dto : enriched) {
@@ -1146,6 +1202,12 @@ public class PostServiceImpl implements PostService {
                 .hasNext(likePage.hasNext())
                 .hasPrev(likePage.hasPrevious())
                 .build();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public long countPublishedPosts() {
+        return postRepository.countByDeletedAtIsNull();
     }
 
     private PostLikeUserDto buildPostLikeUserDto(String userIdStr) {

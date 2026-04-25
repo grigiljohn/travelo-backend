@@ -4,6 +4,8 @@ server:
 spring:
   application:
     name: discovery-service
+  profiles:
+    default: dev
   config:
     import: optional:configserver:http://localhost:8888
   # Search / reindex APIs need Elasticsearch at startup: repository beans connect during context refresh.
@@ -83,6 +85,14 @@ app:
         coverImageUrl: https://images.unsplash.com/photo-1488646953014-85cb44e25828?w=1200
         tag: Off-the-grid
         keywords: [hidden, underrated, off-the-beaten-path, local]
+
+  # OpenAI — POST /api/v1/ai/trip/build-itinerary (OPENAI_API_KEY; template fallback when empty / disabled)
+  openai:
+    enabled: ${OPENAI_ENABLED:true}
+    api-key: ${OPENAI_API_KEY:}
+    model: ${OPENAI_MODEL:gpt-4o-mini}
+    connect-timeout-ms: 15000
+    read-timeout-ms: 120000
 
 # Resilience4j Circuit Breaker Configuration
 resilience4j:

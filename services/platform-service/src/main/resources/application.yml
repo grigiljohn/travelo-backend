@@ -4,6 +4,8 @@ server:
 spring:
   application:
     name: platform-service
+  profiles:
+    default: dev
   config:
     import: optional:configserver:http://localhost:8888
 

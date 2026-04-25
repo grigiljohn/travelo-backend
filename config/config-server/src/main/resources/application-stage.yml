@@ -1,0 +1,11 @@
+# Profile: stage — config repo label (optional) and service discovery; set in ECS/SSM as needed
+management:
+  metrics:
+    tags:
+      service: config-server
+      environment: stage
+spring:
+  cloud:
+    # Optional label when a Git or Vault backend is enabled; native search-locations can ignore
+    config:
+      label: ${SPRING_CLOUD_CONFIG_LABEL:main}

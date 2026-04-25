@@ -66,9 +66,14 @@ public class MusicController {
             @RequestParam(value = "name", required = false) String name,
             @RequestParam(value = "artist", required = false) String artist,
             @RequestParam(value = "mood", required = false) String mood,
-            @RequestParam(value = "durationSeconds", required = false) Integer durationSeconds
+            @RequestParam(value = "genre", required = false) String genre,
+            @RequestParam(value = "bpm", required = false) Integer bpm,
+            @RequestParam(value = "description", required = false) String description,
+            @RequestParam(value = "durationSeconds", required = false) Integer durationSeconds,
+            @RequestParam(value = "isRecommended", required = false, defaultValue = "false") boolean isRecommended
     ) throws IOException {
-        MusicUploadResponse body = musicService.uploadToS3(file, thumbnail, name, artist, mood, durationSeconds);
+        MusicUploadResponse body = musicService.uploadToS3(
+                file, thumbnail, name, artist, mood, genre, bpm, description, durationSeconds, isRecommended);
         return ResponseEntity.status(HttpStatus.CREATED).body(body);
     }
 }

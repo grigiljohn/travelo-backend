@@ -104,7 +104,11 @@ public class MusicService {
             String name,
             String artist,
             String mood,
-            Integer durationSeconds
+            String genre,
+            Integer bpm,
+            String description,
+            Integer durationSeconds,
+            boolean isRecommended
     ) throws IOException {
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("Audio file is required");
@@ -166,10 +170,13 @@ public class MusicService {
         track.setName(trackName);
         track.setArtist(trackArtist);
         track.setMood(mood != null && !mood.isBlank() ? mood.trim() : null);
+        track.setGenre(genre != null && !genre.isBlank() ? genre.trim() : null);
+        track.setBpm(bpm);
+        track.setDescription(description != null && !description.isBlank() ? description.trim() : null);
         track.setDurationSeconds(durationSeconds);
         track.setFileKey(fileKey);
         track.setThumbnailKey(thumbnailKey);
-        track.setIsRecommended(false);
+        track.setIsRecommended(isRecommended);
         track.setIsActive(true);
         track.setPlayCount(0L);
         track = repository.save(track);
@@ -181,6 +188,9 @@ public class MusicService {
                 track.getName(),
                 track.getArtist(),
                 track.getMood(),
+                track.getGenre(),
+                track.getBpm(),
+                track.getDescription(),
                 track.getDurationSeconds(),
                 generatePresignedUrl(track.getThumbnailKey()),
                 generatePresignedUrl(track.getFileKey()),
@@ -224,6 +234,9 @@ public class MusicService {
                 track.getName(),
                 track.getArtist(),
                 track.getMood(),
+                track.getGenre(),
+                track.getBpm(),
+                track.getDescription(),
                 track.getDurationSeconds(),
                 thumbnailUrl,
                 fileUrl,

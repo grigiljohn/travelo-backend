@@ -4,6 +4,8 @@ server:
 spring:
   application:
     name: media-service
+  profiles:
+    default: dev
   config:
     import: optional:configserver:http://localhost:8888
   datasource:
@@ -71,6 +73,10 @@ management:
       exposure:
         include: health,info,metrics,prometheus
   endpoint:
+    health:
+      # Exposes /actuator/health/liveness and /readiness (used by the container HEALTHCHECK)
+      probes:
+        enabled: true
     prometheus:
       enabled: true
   metrics:

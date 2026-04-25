@@ -61,7 +61,7 @@ public class BillingController {
     @Operation(summary = "Enable or disable auto-pay on the wallet")
     public ResponseEntity<Void> autoPay(
             @RequestParam("businessAccountId") UUID businessAccountId,
-            @Valid @RequestBody AutoPayRequest body) {
+            @Valid @RequestBody AutoPayRequest body) throws StripeException {
         billingService.updateAutoPay(businessAccountId, body);
         return ResponseEntity.noContent().build();
     }

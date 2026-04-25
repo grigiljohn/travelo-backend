@@ -54,6 +54,32 @@ public class UserController {
         return ResponseEntity.ok(userService.updateUserProfile(userId, request));
     }
 
+    @PutMapping("/{userId}/location")
+    @Operation(summary = "Update user location", description = "Persist latest location on profile and append to location history.")
+    public ResponseEntity<UserProfileDto> updateUserLocation(
+            @PathVariable("userId") UUID userId,
+            @RequestHeader("X-User-Id") UUID authenticatedUserId,
+            @Valid @RequestBody UpdateUserLocationRequest request) {
+        logger.info("PUT /api/v1/users/{}/location", userId);
+        if (!userId.equals(authenticatedUserId)) {
+            throw new IllegalArgumentException("User can only update their own location");
+        }
+        return ResponseEntity.ok(userService.updateUserLocation(userId, request));
+    }
+
+    @GetMapping("/{userId}/locations")
+    @Operation(summary = "Get user location history", description = "Return latest recorded location entries for the user.")
+    public ResponseEntity<List<UserLocationEntryDto>> getUserLocationHistory(
+            @PathVariable("userId") UUID userId,
+            @RequestHeader("X-User-Id") UUID authenticatedUserId,
+            @RequestParam(value = "limit", defaultValue = "30") @Max(200) int limit) {
+        logger.info("GET /api/v1/users/{}/locations", userId);
+        if (!userId.equals(authenticatedUserId)) {
+            throw new IllegalArgumentException("User can only view their own location history");
+        }
+        return ResponseEntity.ok(userService.getUserLocationHistory(userId, limit));
+    }
+
     @PostMapping("/{userId}/follow")
     @Operation(summary = "Follow user", description = "Follow a user. Returns follow state and updated follower count.")
     public ResponseEntity<FollowResponseDto> followUser(
@@ -183,6 +209,12 @@ public class UserController {
             @RequestParam(value = "viewer_id", required = false) UUID viewerId) {
         logger.info("GET /api/v1/users/{}", userId);
         return ResponseEntity.ok(userService.getUser(userId, viewerId));
+    }
+
+    @GetMapping("/metrics/counts")
+    @Operation(summary = "User metrics counts", description = "Internal metrics endpoint for admin dashboards")
+    public ResponseEntity<Map<String, Object>> counts() {
+        return ResponseEntity.ok(Map.of("usersTotal", userService.countUsers()));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

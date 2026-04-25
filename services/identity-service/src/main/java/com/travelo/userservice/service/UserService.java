@@ -12,6 +12,10 @@ public interface UserService {
     UserProfileDto getUserProfile(UUID userId, UUID viewerId);
     
     UserProfileDto updateUserProfile(UUID userId, UpdateUserProfileRequest request);
+
+    UserProfileDto updateUserLocation(UUID userId, UpdateUserLocationRequest request);
+
+    List<UserLocationEntryDto> getUserLocationHistory(UUID userId, int limit);
     
     FollowResponseDto followUser(UUID followerId, UUID followeeId);
     
@@ -38,5 +42,7 @@ public interface UserService {
      * Users that {@code userId} follows.
      */
     List<UserDto> listFollowing(UUID userId, UUID viewerId, int page, int limit);
+
+    long countUsers();
 }
 

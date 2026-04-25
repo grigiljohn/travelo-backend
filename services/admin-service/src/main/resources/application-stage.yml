@@ -1,0 +1,9 @@
+# Profile: stage — set ADMIN_DATASOURCE_*, ADMIN_CORS_*, ADMIN_JWT_* in SSM
+management:
+  metrics:
+    tags:
+      service: admin-service
+      environment: stage
+  endpoint:
+    health:
+      show-details: when-authorized

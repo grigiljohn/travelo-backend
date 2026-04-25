@@ -16,6 +16,15 @@ import java.util.UUID;
 public interface SavedPostRepository extends JpaRepository<SavedPost, UUID> {
     
     Optional<SavedPost> findByUserIdAndPostIdAndCollectionName(String userId, String postId, String collectionName);
+
+    /**
+     * Batch: which of [postIds] the user has in the given collection.
+     */
+    List<SavedPost> findByUserIdAndPostIdInAndCollectionName(
+            String userId,
+            List<String> postIds,
+            String collectionName
+    );
     
     Page<SavedPost> findByUserIdAndCollectionNameOrderByCreatedAtDesc(String userId, String collectionName, Pageable pageable);
     

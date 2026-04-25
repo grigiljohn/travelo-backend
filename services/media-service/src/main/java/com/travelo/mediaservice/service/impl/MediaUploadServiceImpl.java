@@ -409,6 +409,69 @@ public class MediaUploadServiceImpl implements MediaUploadService {
         return mediaFileRepository.save(media);
     }
 
+    @Override
+    @Transactional
+    public MediaFile tagWalletDocument(UUID mediaId, UUID ownerId, String category) {
+        MediaFile media = mediaFileRepository.findById(mediaId)
+                .orElseThrow(() -> new MediaFileNotFoundException(mediaId));
+        if (!media.getOwnerId().equals(ownerId)) {
+            throw new SecurityException("owner mismatch for wallet document");
+        }
+        java.util.Map<String, Object> meta = media.getMeta() != null ? media.getMeta() : new HashMap<>();
+        meta.put("wallet_document", true);
+        meta.put("wallet_category", category == null ? "other" : category.trim().toLowerCase(Locale.ROOT));
+        meta.put("wallet_uploaded_at", OffsetDateTime.now().toString());
+        media.setMeta(meta);
+        media.setState(MediaStatus.READY);
+        media.setSafetyStatus("safe");
+        return mediaFileRepository.save(media);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<MediaFile> listWalletDocuments(UUID ownerId) {
+        return mediaFileRepository.findByOwnerId(ownerId).stream()
+                .filter(this::isWalletDocument)
+                .sorted(Comparator.comparing(MediaFile::getCreatedAt, Comparator.nullsLast(Comparator.reverseOrder())))
+                .toList();
+    }
+
+    @Override
+    @Transactional
+    public void deleteWalletDocument(UUID mediaId, UUID ownerId) {
+        MediaFile media = mediaFileRepository.findById(mediaId)
+                .orElseThrow(() -> new MediaFileNotFoundException(mediaId));
+        if (!media.getOwnerId().equals(ownerId)) {
+            throw new SecurityException("owner mismatch for wallet document delete");
+        }
+        if (!isWalletDocument(media)) {
+            throw new IllegalArgumentException("media is not a wallet document");
+        }
+        localStorageService.delete(media.getStorageKey());
+        if (media.getVariants() != null) {
+            for (MediaVariant variant : media.getVariants()) {
+                if (variant != null && variant.getKey() != null && !variant.getKey().isBlank()) {
+                    localStorageService.delete(variant.getKey());
+                }
+            }
+        }
+        mediaFileRepository.delete(media);
+    }
+
+    private boolean isWalletDocument(MediaFile media) {
+        if (media == null || media.getMeta() == null) {
+            return false;
+        }
+        Object marker = media.getMeta().get("wallet_document");
+        if (marker instanceof Boolean b) {
+            return b;
+        }
+        if (marker instanceof String s) {
+            return "true".equalsIgnoreCase(s.trim());
+        }
+        return media.getMeta().containsKey("wallet_category");
+    }
+
     private static com.travelo.mediaservice.entity.MediaType mapMediaType(String mediaType) {
         if (mediaType == null) return com.travelo.mediaservice.entity.MediaType.OTHER;
         return switch (mediaType.toLowerCase()) {

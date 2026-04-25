@@ -1,0 +1,15 @@
+# Profile: stage — if using Config Server for Eureka peers, set SPRING_CONFIG_IMPORT
+spring:
+  config:
+    import: ${SPRING_CONFIG_IMPORT:optional:configserver:http://localhost:8888}
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:http://localhost:8761/eureka/}
+  instance:
+    hostname: ${EUREKA_INSTANCE_HOSTNAME:}
+management:
+  metrics:
+    tags:
+      service: service-registry
+      environment: stage

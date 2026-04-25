@@ -17,12 +17,14 @@ COPY services/discovery-service/pom.xml services/discovery-service/
 COPY services/realtime-service/pom.xml services/realtime-service/
 COPY services/commerce-service/pom.xml services/commerce-service/
 COPY services/platform-service/pom.xml services/platform-service/
+COPY services/admin-service/pom.xml services/admin-service/
 RUN --mount=type=cache,target=/root/.m2 \
-    mvn -B -pl services/media-service -am -f pom.xml dependency:go-offline -DskipTests
+    mvn -B -pl services/media-service -am -f pom.xml dependency:go-offline -DskipTests \
+ && cp -a /root/.m2 /opt/m2-offline
 
 FROM maven:3.9.6-eclipse-temurin-21 AS build
 WORKDIR /workspace
-COPY --from=deps /root/.m2 /root/.m2
+COPY --from=deps /opt/m2-offline /root/.m2
 COPY . .
 RUN --mount=type=cache,target=/root/.m2 \
     mvn -B -pl services/media-service -am -f pom.xml clean package -DskipTests
@@ -42,7 +44,7 @@ USER travelo
 EXPOSE 8084
 # Larger RAM ceiling — FFmpeg stays out of the JVM heap, but Hibernate + S3 buffers benefit.
 ENV JAVA_OPTS="-XX:+UseContainerSupport -XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError -Djava.security.egd=file:/dev/./urandom"
-ENV SPRING_PROFILES_ACTIVE="production"
+ENV SPRING_PROFILES_ACTIVE="docker"
 ENV MEDIA_STORAGE_PATH="/app/uploads"
 HEALTHCHECK --interval=15s --timeout=5s --start-period=90s --retries=5 \
   CMD curl -fsS http://127.0.0.1:8084/actuator/health/liveness || exit 1

@@ -36,14 +36,26 @@ public interface PostService {
 
     /**
      * @param authorUserIds when non-null and non-empty, restrict to posts from these user ids (follow graph).
+     * @param viewerUserId when set, enriches [is_liked, is_saved, is_dreamed] for that viewer.
      */
-    PageResponse<PostDto> getPosts(int page, int limit, String mood, List<String> authorUserIds);
+    PageResponse<PostDto> getPosts(int page, int limit, String mood, List<String> authorUserIds, String viewerUserId);
 
-    default PageResponse<PostDto> getPosts(int page, int limit, String mood) {
-        return getPosts(page, limit, mood, null);
+    default PageResponse<PostDto> getPosts(int page, int limit, String mood, List<String> authorUserIds) {
+        return getPosts(page, limit, mood, authorUserIds, null);
     }
 
-    PostDto getPostById(String postId);
+    default PageResponse<PostDto> getPosts(int page, int limit, String mood) {
+        return getPosts(page, limit, mood, null, null);
+    }
+
+    default PostDto getPostById(String postId) {
+        return getPostByIdForViewer(postId, null);
+    }
+
+    /**
+     * @param viewerUserId optional; when set, enriches engagement fields for the viewer.
+     */
+    PostDto getPostByIdForViewer(String postId, String viewerUserId);
 
     PostDto updatePost(String postId, String userId, UpdatePostRequest request);
 
@@ -83,5 +95,7 @@ public interface PostService {
      * Paginated list of users who liked the post (newest like first), with display names from user-service when available.
      */
     PageResponse<PostLikeUserDto> listPostLikers(String postId, int page, int limit);
+
+    long countPublishedPosts();
 }
 

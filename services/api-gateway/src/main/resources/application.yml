@@ -5,6 +5,8 @@ server:
 spring:
   application:
     name: api-gateway
+  profiles:
+    default: dev
   main:
     web-application-type: reactive
   config:

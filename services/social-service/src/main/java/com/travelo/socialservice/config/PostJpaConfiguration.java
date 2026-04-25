@@ -20,7 +20,8 @@ import java.util.Properties;
         basePackages = {
                 "com.travelo.postservice.repository",
                 "com.travelo.planservice.repository",
-                "com.travelo.circlesservice.repository"
+                "com.travelo.circlesservice.repository",
+                "com.travelo.collectionservice.repository"
         },
         entityManagerFactoryRef = "postEntityManagerFactory",
         transactionManagerRef = "postTransactionManager"
@@ -37,7 +38,8 @@ public class PostJpaConfiguration {
         em.setPackagesToScan(
                 "com.travelo.postservice.entity",
                 "com.travelo.planservice.persistence",
-                "com.travelo.circlesservice.persistence"
+                "com.travelo.circlesservice.persistence",
+                "com.travelo.collectionservice.entity"
         );
         HibernateJpaVendorAdapter adapter = new HibernateJpaVendorAdapter();
         adapter.setShowSql(false);

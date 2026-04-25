@@ -6,6 +6,8 @@ server:
 spring:
   application:
     name: admin-service
+  profiles:
+    default: dev
   datasource:
     url: ${ADMIN_DATASOURCE_URL:jdbc:postgresql://localhost:5432/travelo_admin}
     username: ${ADMIN_DATASOURCE_USER:postgres}
@@ -22,6 +24,13 @@ spring:
     locations: classpath:db/migration
 
 app:
+  # media-service hosts the music library (S3 + travelo_media DB). Used to proxy admin uploads.
+  media:
+    base-url: ${MEDIA_SERVICE_BASE_URL:http://localhost:8084}
+  identity:
+    base-url: ${IDENTITY_SERVICE_BASE_URL:http://localhost:8081}
+  social:
+    base-url: ${SOCIAL_SERVICE_BASE_URL:http://localhost:8096}
   admin:
     jwt:
       secret: ${ADMIN_JWT_SECRET:changeMeAdminJwtSecretKeyMinimum32BytesLong!!}

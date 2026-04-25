@@ -54,6 +54,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/auth/google",
                                "/api/v1/auth/facebook", "/api/v1/auth/refresh-token", "/api/v1/auth/forgot-password", 
                                "/api/v1/auth/reset-password", "/api/v1/auth/verify").permitAll()
+                .requestMatchers("/api/v1/users/metrics/counts").permitAll()
                 .requestMatchers("/health").permitAll()
                 .requestMatchers("/actuator/**").permitAll()
                 .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll()

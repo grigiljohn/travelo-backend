@@ -6,12 +6,17 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
 import java.util.Optional;
 
 @Repository
 public interface LikeRepository extends JpaRepository<Like, Long> {
     Optional<Like> findByUserIdAndPostId(String userId, String postId);
     boolean existsByUserIdAndPostId(String userId, String postId);
+    /**
+     * Batch: likes the viewer has on a set of posts (e.g. feed enrichment).
+     */
+    List<Like> findByUserIdAndPostIdIn(String userId, List<String> postIds);
     void deleteByUserIdAndPostId(String userId, String postId);
     long countByPostId(String postId);
 

@@ -35,7 +35,6 @@ FROM (
             'u_sienna',
             'Sienna Rao',
             'https://i.pravatar.cc/200?img=32',
-            'f1111111-1111-4111-8111-111111111101'::uuid,
             'https://images.unsplash.com/photo-1507525428034-b723cf961d3e',
             'https://images.unsplash.com/photo-1507525428034-b723cf961d3e',
             'IMAGE',

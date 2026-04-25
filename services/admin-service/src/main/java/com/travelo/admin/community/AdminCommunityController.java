@@ -22,12 +22,12 @@ public class AdminCommunityController {
     }
 
     @GetMapping
-    public ResponseEntity<ApiResponse<PageResponse<AdminManagedCommunity>>> list(
+    public ResponseEntity<ApiResponse<PageResponse<AdminCommunityListItem>>> list(
             @RequestParam(required = false) String q,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        return ResponseEntity.ok(ApiResponse.ok(PageResponse.from(
-                service.page(q, PageRequest.of(page, size, Sort.by("id").descending())))));
+        return ResponseEntity.ok(ApiResponse.ok(
+                service.page(q, PageRequest.of(page, size, Sort.by("id").descending()))));
     }
 
     @PostMapping

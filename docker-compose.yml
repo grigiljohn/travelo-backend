@@ -33,7 +33,7 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-travelo}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-travelo}
-      POSTGRES_MULTIPLE_DATABASES: travelo_auth,travelo_posts,travelo_stories,travelo_reels,travelo_media,travelo_messaging,travelo_shops,travelo_ads
+      POSTGRES_MULTIPLE_DATABASES: travelo_auth,travelo_posts,travelo_stories,travelo_reels,travelo_media,travelo_messaging,travelo_shops,travelo_ads,travelo_admin
     ports: ["5432:5432"]
     volumes:
       - postgres-data:/var/lib/postgresql/data
@@ -156,6 +156,7 @@ services:
       DISCOVERY_SERVICE_URI: "http://discovery-service:8088"
       REALTIME_SERVICE_URI: "http://realtime-service:8098"
       PLATFORM_SERVICE_URI: "http://platform-service:8099"
+      ADMIN_SERVICE_URI: "http://admin-service:8190"
 
   identity-service:
     <<: *java-defaults
@@ -258,6 +259,9 @@ services:
       SHOP_SERVICE_URL: "http://commerce-service:8097"
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: "http://service-registry:8761/eureka/"
       GOOGLE_PLACES_API_KEY: ${GOOGLE_PLACES_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      OPENAI_ENABLED: ${OPENAI_ENABLED:-true}
 
   realtime-service:
     <<: *java-defaults
@@ -317,6 +321,24 @@ services:
       <<: *java-env
       SPRING_CONFIG_IMPORT: "optional:configserver:http://config-server:8888"
       EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: "http://service-registry:8761/eureka/"
+
+  admin-service:
+    <<: *java-defaults
+    build: { context: ., dockerfile: services/admin-service/Dockerfile }
+    image: travelo/admin-service:local
+    depends_on:
+      postgres: { condition: service_healthy }
+    ports: ["8190:8190"]
+    environment:
+      <<: *java-env
+      PORT: "8190"
+      ADMIN_DATASOURCE_URL: "jdbc:postgresql://postgres:5432/travelo_admin"
+      ADMIN_DATASOURCE_USER: ${POSTGRES_USER:-travelo}
+      ADMIN_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-travelo}
+      IDENTITY_SERVICE_BASE_URL: "http://identity-service:8081"
+      SOCIAL_SERVICE_BASE_URL: "http://social-service:8096"
+      ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET:-changeMeAdminJwtSecretKeyMinimum32BytesLong!!}
+      ADMIN_CORS_ORIGINS: ${ADMIN_CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
 
   # ---------------- ops ----------------
   pgadmin:

@@ -1,6 +1,7 @@
-# Production configuration for media-service
-
+# Production — set SPRING_CONFIG_IMPORT, EUREKA_*, and AWS/S3/MEDIA_* in the deployment
 spring:
+  config:
+    import: ${SPRING_CONFIG_IMPORT:optional:configserver:http://localhost:8888}
   # Redis connection for shared reel progress tracker (enabled via reel.progress.backend=redis).
   data:
     redis:
@@ -14,6 +15,11 @@ spring:
           max-active: 16
           max-idle: 8
           min-idle: 1
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:http://localhost:8761/eureka/}
 
 reel:
   progress:

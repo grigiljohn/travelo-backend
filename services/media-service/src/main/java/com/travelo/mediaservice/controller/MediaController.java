@@ -97,6 +97,35 @@ public class MediaController {
         return mediaUploadService.uploadFile(file, ownerId, name, file.getContentType(), mediaType);
     }
 
+    @PostMapping(value = "/wallet/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @ResponseStatus(HttpStatus.CREATED)
+    public WalletDocumentDto uploadWalletDocument(
+            @RequestParam("owner_id") UUID ownerId,
+            @RequestParam("category") String category,
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "filename", required = false) String filename) {
+        String name = filename != null ? filename : (file.getOriginalFilename() != null ? file.getOriginalFilename() : "document");
+        DirectUploadResponse uploaded = mediaUploadService.uploadFile(file, ownerId, name, file.getContentType(), "other");
+        MediaFile tagged = mediaUploadService.tagWalletDocument(uploaded.mediaId(), ownerId, category);
+        return toWalletDocumentDto(tagged);
+    }
+
+    @GetMapping("/wallet/documents")
+    @ResponseStatus(HttpStatus.OK)
+    public List<WalletDocumentDto> listWalletDocuments(@RequestParam("owner_id") UUID ownerId) {
+        return mediaUploadService.listWalletDocuments(ownerId).stream()
+                .map(this::toWalletDocumentDto)
+                .toList();
+    }
+
+    @DeleteMapping("/wallet/documents/{mediaId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteWalletDocument(
+            @PathVariable("mediaId") UUID mediaId,
+            @RequestParam("owner_id") UUID ownerId) {
+        mediaUploadService.deleteWalletDocument(mediaId, ownerId);
+    }
+
     /**
      * Reel delivery pipeline: smart trim, FFmpeg filters, 9:16 720×1280, optional library music, fast H.264.
      * POST /v1/media/reel/process-upload
@@ -490,5 +519,23 @@ public class MediaController {
         if (adminToken == null || !moderationAdminToken.equals(adminToken)) {
             throw new SecurityException("Invalid moderation admin token");
         }
+    }
+
+    private WalletDocumentDto toWalletDocumentDto(MediaFile media) {
+        String category = "other";
+        if (media.getMeta() != null && media.getMeta().get("wallet_category") != null) {
+            category = String.valueOf(media.getMeta().get("wallet_category"));
+        }
+        String downloadUrl = "/v1/media/files/" + media.getId();
+        return new WalletDocumentDto(
+                media.getId(),
+                media.getOwnerId(),
+                category,
+                media.getFilename(),
+                media.getMimeType(),
+                media.getSizeBytes(),
+                downloadUrl,
+                media.getCreatedAt()
+        );
     }
 }

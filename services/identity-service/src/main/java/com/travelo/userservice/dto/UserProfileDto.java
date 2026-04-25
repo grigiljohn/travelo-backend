@@ -39,6 +39,12 @@ public class UserProfileDto {
     private OffsetDateTime createdAt;
     @JsonProperty("updated_at")
     private OffsetDateTime updatedAt;
+    @JsonProperty("location_required")
+    private Boolean locationRequired;
+    @JsonProperty("location_permission_granted")
+    private Boolean locationPermissionGranted;
+    @JsonProperty("current_location")
+    private UserLocationEntryDto currentLocation;
 
     // Getters and Setters
     public UUID getId() { return id; }
@@ -81,5 +87,11 @@ public class UserProfileDto {
     public void setCreatedAt(OffsetDateTime createdAt) { this.createdAt = createdAt; }
     public OffsetDateTime getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(OffsetDateTime updatedAt) { this.updatedAt = updatedAt; }
+    public Boolean getLocationRequired() { return locationRequired; }
+    public void setLocationRequired(Boolean locationRequired) { this.locationRequired = locationRequired; }
+    public Boolean getLocationPermissionGranted() { return locationPermissionGranted; }
+    public void setLocationPermissionGranted(Boolean locationPermissionGranted) { this.locationPermissionGranted = locationPermissionGranted; }
+    public UserLocationEntryDto getCurrentLocation() { return currentLocation; }
+    public void setCurrentLocation(UserLocationEntryDto currentLocation) { this.currentLocation = currentLocation; }
 }
 

@@ -77,4 +77,19 @@ public interface MediaUploadService {
      * decision: approve | reject
      */
     MediaFile applyModerationDecision(UUID mediaId, String decision, String reason, String reviewer);
+
+    /**
+     * Mark an uploaded media row as a travel-wallet document category and make it immediately readable.
+     */
+    MediaFile tagWalletDocument(UUID mediaId, UUID ownerId, String category);
+
+    /**
+     * List uploaded travel-wallet documents for a user.
+     */
+    List<MediaFile> listWalletDocuments(UUID ownerId);
+
+    /**
+     * Delete a travel-wallet document owned by the user.
+     */
+    void deleteWalletDocument(UUID mediaId, UUID ownerId);
 }

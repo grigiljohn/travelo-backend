@@ -191,7 +191,7 @@ public class FeedServiceImpl implements FeedService {
         int fetchLimit = Math.min(Math.max(limit, 1) * 3, MAX_FEED_COMPUTATION_LIMIT);
         List<UUID> followedUserIds = userServiceClient.getFollowing(userId);
         Set<String> followedSet = followedUserIds.stream().map(UUID::toString).collect(Collectors.toSet());
-        List<PostDto> posts = fetchPosts(fetchLimit, mood, followedUserIds);
+        List<PostDto> posts = fetchPosts(fetchLimit, mood, followedUserIds, userId.toString());
         List<PostDto> ranked = feedRankingService.rankPosts(posts, userId, followedUserIds);
 
         List<PostDto> rankedLimited = ranked.stream()
@@ -275,9 +275,9 @@ public class FeedServiceImpl implements FeedService {
         logger.debug("User {} follows {} users", userId, followedUserIds.size());
 
         // Step 2: Fetch posts (from followed users + recommendations)
-        List<PostDto> posts = fetchPosts(limit, mood, followedUserIds);
-        logger.debug("Fetched {} posts", posts.size());
         final String viewerId = userId.toString();
+        List<PostDto> posts = fetchPosts(limit, mood, followedUserIds, viewerId);
+        logger.debug("Fetched {} posts", posts.size());
 
         if (posts.isEmpty()) {
             if (!"home".equalsIgnoreCase(surface)) {
@@ -337,7 +337,8 @@ public class FeedServiceImpl implements FeedService {
      * Fetch post candidates: prefer people the viewer follows; backfill with global discovery
      * when the followed slice is thin so the feed stays usable.
      */
-    private List<PostDto> fetchPosts(int limit, String mood, List<UUID> followedUserIds) {
+    private List<PostDto> fetchPosts(
+            int limit, String mood, List<UUID> followedUserIds, String viewerUserId) {
         try {
             int fetchLimit = Math.min(limit * 3, MAX_FEED_COMPUTATION_LIMIT);
 
@@ -346,16 +347,17 @@ public class FeedServiceImpl implements FeedService {
                     .toList();
 
             if (followedAuthorIds.isEmpty()) {
-                return postServiceClient.getPosts(1, fetchLimit, mood, null);
+                return postServiceClient.getPosts(1, fetchLimit, mood, null, viewerUserId);
             }
 
-            List<PostDto> fromFollowed = postServiceClient.getPosts(1, fetchLimit, mood, followedAuthorIds);
+            List<PostDto> fromFollowed =
+                    postServiceClient.getPosts(1, fetchLimit, mood, followedAuthorIds, viewerUserId);
             int minBeforeBackfill = Math.max(6, fetchLimit / 3);
             if (fromFollowed.size() >= minBeforeBackfill) {
                 return fromFollowed;
             }
 
-            List<PostDto> global = postServiceClient.getPosts(1, fetchLimit, mood, null);
+            List<PostDto> global = postServiceClient.getPosts(1, fetchLimit, mood, null, viewerUserId);
             List<PostDto> merged = mergeFollowedThenDiscovery(fromFollowed, global, fetchLimit);
             logger.debug(
                     "flow=feed_fetch_posts_backfill followedCount={} globalCount={} mergedCount={}",

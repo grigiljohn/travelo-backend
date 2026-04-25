@@ -1,0 +1,18 @@
+# Profile: stage — set POSTGRES/Redis/JWT/MAIL from SSM; never enable default OTP
+spring:
+  config:
+    import: ${SPRING_CONFIG_IMPORT:optional:configserver:http://localhost:8888}
+  jpa:
+    show-sql: false
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:http://localhost:8761/eureka/}
+management:
+  metrics:
+    tags:
+      service: identity-service
+      environment: stage
+app:
+  otp:
+    use-default-otp: false

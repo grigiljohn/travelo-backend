@@ -52,6 +52,10 @@ public class PostDto {
     
     @JsonProperty("is_saved")
     private Boolean isSaved;
+
+    /** In "Dream" collection (saved-posts table, collection_name = {@code Dream}). */
+    @JsonProperty("is_dreamed")
+    private Boolean isDreamed;
     
     @JsonProperty("is_verified")
     private Boolean isVerified;
@@ -239,6 +243,14 @@ public class PostDto {
 
     public void setIsSaved(Boolean isSaved) {
         this.isSaved = isSaved;
+    }
+
+    public Boolean getIsDreamed() {
+        return isDreamed;
+    }
+
+    public void setIsDreamed(Boolean isDreamed) {
+        this.isDreamed = isDreamed;
     }
 
     public Boolean getIsVerified() {

@@ -1,0 +1,6 @@
+# Profile: dev — with composite (see application.properties). Staging/Prod: spring.profiles.active=composite,stage|production
+management:
+  metrics:
+    tags:
+      service: config-server
+      environment: dev

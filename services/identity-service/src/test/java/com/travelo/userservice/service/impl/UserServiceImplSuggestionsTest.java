@@ -6,6 +6,7 @@ import com.travelo.userservice.dto.SuggestedUserDto;
 import com.travelo.userservice.entity.Follow;
 import com.travelo.userservice.event.UserEventPublisher;
 import com.travelo.userservice.repository.FollowRepository;
+import com.travelo.userservice.repository.UserLocationHistoryRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -25,6 +26,7 @@ class UserServiceImplSuggestionsTest {
 
     private UserRepository userRepository;
     private FollowRepository followRepository;
+    private UserLocationHistoryRepository userLocationHistoryRepository;
     private UserEventPublisher userEventPublisher;
     private UserServiceImpl service;
 
@@ -39,8 +41,9 @@ class UserServiceImplSuggestionsTest {
     void setUp() {
         userRepository = mock(UserRepository.class);
         followRepository = mock(FollowRepository.class);
+        userLocationHistoryRepository = mock(UserLocationHistoryRepository.class);
         userEventPublisher = mock(UserEventPublisher.class);
-        service = new UserServiceImpl(userRepository, followRepository, userEventPublisher);
+        service = new UserServiceImpl(userRepository, followRepository, userLocationHistoryRepository, userEventPublisher);
     }
 
     @Test

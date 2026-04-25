@@ -1,0 +1,25 @@
+# Profile: production — set JWT, SPRING_CONFIG_IMPORT, EUREKA, and *SERVICE_URI from Secrets Manager/SSM
+spring:
+  config:
+    import: ${SPRING_CONFIG_IMPORT:optional:configserver:http://localhost:8888}
+
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:http://localhost:8761/eureka/}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    tags:
+      service: api-gateway
+      environment: production

@@ -17,6 +17,7 @@ import java.util.UUID;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Arrays;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/v1/posts")
@@ -216,6 +217,13 @@ public class PostController {
             throw e;
         }
     }
+
+    @GetMapping("/metrics/counts")
+    @ResponseStatus(HttpStatus.OK)
+    public ResponseEntity<ApiResponse<Map<String, Object>>> postCounts() {
+        long total = postService.countPublishedPosts();
+        return ResponseEntity.ok(ApiResponse.success("Post metrics", Map.of("postsTotal", total)));
+    }
     
     /**
      * Determine post type from media items.
@@ -238,11 +246,17 @@ public class PostController {
             @RequestParam(value = "page", defaultValue = "1") int page,
             @RequestParam(value = "limit", defaultValue = "10") @Max(200) int limit,
             @RequestParam(value = "mood", required = false) String mood,
-            @RequestParam(value = "author_ids", required = false) List<String> authorIds) {
-        logger.debug("Getting posts - page: {}, limit: {}, mood: {}, authorIds={}", page, limit, mood,
-                authorIds == null ? 0 : authorIds.size());
+            @RequestParam(value = "author_ids", required = false) List<String> authorIds,
+            @RequestParam(value = "viewer_id", required = false) String viewerId,
+            @RequestHeader(value = "X-User-Id", required = false) String headerUserId) {
+        String viewer = (viewerId != null && !viewerId.isBlank()) ? viewerId.trim() : null;
+        if (viewer == null) {
+            viewer = resolveOptionalViewerId(headerUserId);
+        }
+        logger.debug("Getting posts - page: {}, limit: {}, mood: {}, authorIds={}, viewer={}", page, limit, mood,
+                authorIds == null ? 0 : authorIds.size(), viewer);
         try {
-            PageResponse<PostDto> posts = postService.getPosts(page, limit, mood, authorIds);
+            PageResponse<PostDto> posts = postService.getPosts(page, limit, mood, authorIds, viewer);
             logger.info("Retrieved {} posts (page: {}, limit: {})", 
                     posts.getData() != null ? posts.getData().size() : 0, page, limit);
             return ResponseEntity.ok(ApiResponse.success("Posts retrieved successfully", posts));
@@ -348,10 +362,12 @@ public class PostController {
 
     @GetMapping("/{postId}")
     public ResponseEntity<ApiResponse<PostDto>> getPostById(
-            @PathVariable String postId) {
-        logger.debug("Getting post by ID: {}", postId);
+            @PathVariable String postId,
+            @RequestHeader(value = "X-User-Id", required = false) String headerUserId) {
+        String viewer = resolveOptionalViewerId(headerUserId);
+        logger.debug("Getting post by ID: {}, viewer={}", postId, viewer);
         try {
-            PostDto post = postService.getPostById(postId);
+            PostDto post = postService.getPostByIdForViewer(postId, viewer);
             logger.info("Post retrieved successfully - ID: {}", postId);
             return ResponseEntity.ok(ApiResponse.success("Post retrieved successfully", post));
         } catch (Exception e) {
@@ -508,6 +524,17 @@ public class PostController {
     }
 
     public record ShareResponse(Integer shares, String shareUrl) {
+    }
+
+    private String resolveOptionalViewerId(String headerUserId) {
+        String userId = SecurityUtils.getCurrentUserIdAsString();
+        if (userId != null) {
+            return userId;
+        }
+        if (devHeaderUserFallbackEnabled && headerUserId != null && !headerUserId.isBlank()) {
+            return headerUserId;
+        }
+        return null;
     }
 
     private String resolveUserIdOrThrow(String headerUserId, String action, String postId) {

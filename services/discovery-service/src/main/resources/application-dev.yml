@@ -1,0 +1,6 @@
+# Profile: dev (default) — Elasticsearch, Kafka, Postgres; docker compose up
+management:
+  metrics:
+    tags:
+      service: discovery-service
+      environment: dev

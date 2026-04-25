@@ -1,0 +1,6 @@
+# Profile: dev (default) — set POSTGRES_*, Redis, and JWT; optional DEFAULT_OTP for emulators
+management:
+  metrics:
+    tags:
+      service: identity-service
+      environment: dev

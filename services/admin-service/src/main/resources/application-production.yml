@@ -1,0 +1,9 @@
+# Profile: production
+management:
+  endpoint:
+    health:
+      show-details: when-authorized
+  metrics:
+    tags:
+      service: admin-service
+      environment: production

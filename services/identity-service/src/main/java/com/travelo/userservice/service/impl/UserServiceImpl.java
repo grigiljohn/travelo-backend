@@ -3,11 +3,13 @@ package com.travelo.userservice.service.impl;
 import com.travelo.userservice.dto.*;
 import com.travelo.authservice.entity.User;
 import com.travelo.userservice.entity.Follow;
+import com.travelo.userservice.entity.UserLocationHistory;
 import com.travelo.userservice.dto.SuggestedUserDto;
 import com.travelo.userservice.dto.events.UserFollowedEvent;
 import com.travelo.userservice.event.UserEventPublisher;
 import com.travelo.authservice.repository.UserRepository;
 import com.travelo.userservice.repository.FollowRepository;
+import com.travelo.userservice.repository.UserLocationHistoryRepository;
 import com.travelo.userservice.service.UserService;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
@@ -39,15 +41,18 @@ public class UserServiceImpl implements UserService {
 
     private final UserRepository userRepository;
     private final FollowRepository followRepository;
+    private final UserLocationHistoryRepository userLocationHistoryRepository;
     private final UserEventPublisher userEventPublisher;
 
     public UserServiceImpl(UserRepository userRepository,
                            FollowRepository followRepository,
+                           UserLocationHistoryRepository userLocationHistoryRepository,
                            UserEventPublisher userEventPublisher) {
         this.userRepository = userRepository;
         this.followRepository = followRepository;
+        this.userLocationHistoryRepository = userLocationHistoryRepository;
         this.userEventPublisher = userEventPublisher;
-        logger.info("UserServiceImpl initialized with UserRepository, FollowRepository, UserEventPublisher");
+        logger.info("UserServiceImpl initialized with repositories and UserEventPublisher");
     }
 
     @Override
@@ -141,6 +146,9 @@ public class UserServiceImpl implements UserService {
             profile.setLikesAndSavesCount(0L);
             profile.setIpAddress("Unknown");
             profile.setCoverPhotoUrl(null);
+            profile.setLocationRequired(true);
+            profile.setLocationPermissionGranted(false);
+            profile.setCurrentLocation(null);
             profile.setCreatedAt(OffsetDateTime.now());
             profile.setUpdatedAt(OffsetDateTime.now());
             return profile;
@@ -158,6 +166,9 @@ public class UserServiceImpl implements UserService {
         profile.setPhone(userEntity.getMobile());
         profile.setIsPrivate(Boolean.TRUE.equals(userEntity.getIsPrivate()));
         profile.setIsVerified(Boolean.TRUE.equals(userEntity.getIsEmailVerified()));
+        profile.setLocationRequired(Boolean.TRUE.equals(userEntity.getLocationRequired()));
+        profile.setLocationPermissionGranted(Boolean.TRUE.equals(userEntity.getLocationPermissionGranted()));
+        profile.setCurrentLocation(toCurrentLocationDto(userEntity));
         
         // Get follower/following counts with error handling (table might not exist)
         try {
@@ -230,6 +241,9 @@ public class UserServiceImpl implements UserService {
             profile.setDraftCount(0L);
             profile.setLikesAndSavesCount(0L);
             profile.setIpAddress("Unknown");
+            profile.setLocationRequired(true);
+            profile.setLocationPermissionGranted(false);
+            profile.setCurrentLocation(null);
             profile.setCreatedAt(OffsetDateTime.now());
             profile.setUpdatedAt(OffsetDateTime.now());
             return profile;
@@ -271,9 +285,96 @@ public class UserServiceImpl implements UserService {
         if (request.getIsPrivate() != null) {
             user.setIsPrivate(request.getIsPrivate());
         }
+        if (request.getLocationPermissionGranted() != null) {
+            user.setLocationPermissionGranted(request.getLocationPermissionGranted());
+        }
 
         userRepository.save(user);
         return getUserProfile(userId, userId);
+    }
+
+    @Override
+    @Transactional
+    public UserProfileDto updateUserLocation(UUID userId, UpdateUserLocationRequest request) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+
+        final OffsetDateTime capturedAt = request.getCapturedAt() != null ? request.getCapturedAt() : OffsetDateTime.now();
+        final String locationLabel = trimToNull(request.getLocationLabel());
+        final String city = trimToNull(request.getCity());
+        final String country = trimToNull(request.getCountry());
+        final String source = trimToNull(request.getSource());
+
+        user.setCurrentLatitude(request.getLatitude());
+        user.setCurrentLongitude(request.getLongitude());
+        user.setCurrentLocationLabel(locationLabel);
+        user.setCurrentCity(city);
+        user.setCurrentCountry(country);
+        user.setCurrentLocationUpdatedAt(capturedAt);
+        user.setLocationPermissionGranted(request.getPermissionGranted() != null
+                ? request.getPermissionGranted()
+                : Boolean.TRUE);
+        userRepository.save(user);
+
+        UserLocationHistory row = new UserLocationHistory();
+        row.setUserId(userId);
+        row.setLatitude(request.getLatitude());
+        row.setLongitude(request.getLongitude());
+        row.setLocationLabel(locationLabel);
+        row.setCity(city);
+        row.setCountry(country);
+        row.setSource(source);
+        row.setCapturedAt(capturedAt);
+        userLocationHistoryRepository.save(row);
+
+        return getUserProfile(userId, userId);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<UserLocationEntryDto> getUserLocationHistory(UUID userId, int limit) {
+        int capped = Math.min(Math.max(limit, 1), 200);
+        List<UserLocationHistory> rows = userLocationHistoryRepository.findByUserIdOrderByCapturedAtDesc(
+                userId,
+                PageRequest.of(0, capped));
+        List<UserLocationEntryDto> out = new ArrayList<>(rows.size());
+        for (UserLocationHistory row : rows) {
+            out.add(toLocationEntryDto(row));
+        }
+        return out;
+    }
+
+    private UserLocationEntryDto toCurrentLocationDto(User user) {
+        if (user.getCurrentLatitude() == null || user.getCurrentLongitude() == null) {
+            return null;
+        }
+        UserLocationEntryDto dto = new UserLocationEntryDto();
+        dto.setLatitude(user.getCurrentLatitude());
+        dto.setLongitude(user.getCurrentLongitude());
+        dto.setLocationLabel(user.getCurrentLocationLabel());
+        dto.setCity(user.getCurrentCity());
+        dto.setCountry(user.getCurrentCountry());
+        dto.setSource("profile");
+        dto.setCapturedAt(user.getCurrentLocationUpdatedAt());
+        return dto;
+    }
+
+    private UserLocationEntryDto toLocationEntryDto(UserLocationHistory row) {
+        UserLocationEntryDto dto = new UserLocationEntryDto();
+        dto.setLatitude(row.getLatitude());
+        dto.setLongitude(row.getLongitude());
+        dto.setLocationLabel(row.getLocationLabel());
+        dto.setCity(row.getCity());
+        dto.setCountry(row.getCountry());
+        dto.setSource(row.getSource());
+        dto.setCapturedAt(row.getCapturedAt());
+        return dto;
+    }
+
+    private String trimToNull(String value) {
+        if (value == null) return null;
+        String t = value.trim();
+        return t.isEmpty() ? null : t;
     }
 
     @Override
@@ -587,6 +688,12 @@ public class UserServiceImpl implements UserService {
             out.add(getUser(f.getFolloweeId(), viewerId));
         }
         return out;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public long countUsers() {
+        return userRepository.count();
     }
 }
 

@@ -27,6 +27,15 @@ public class MusicTrack {
     @Column(length = 50)
     private String mood; // chill, romantic, energetic, calm, happy, etc.
 
+    @Column(length = 100)
+    private String genre;
+
+    @Column
+    private Integer bpm;
+
+    @Column(columnDefinition = "text")
+    private String description;
+
     @Column(name = "duration_seconds")
     private Integer durationSeconds;
 
@@ -97,6 +106,30 @@ public class MusicTrack {
 
     public void setMood(String mood) {
         this.mood = mood;
+    }
+
+    public String getGenre() {
+        return genre;
+    }
+
+    public void setGenre(String genre) {
+        this.genre = genre;
+    }
+
+    public Integer getBpm() {
+        return bpm;
+    }
+
+    public void setBpm(Integer bpm) {
+        this.bpm = bpm;
+    }
+
+    public String getDescription() {
+        return description;
+    }
+
+    public void setDescription(String description) {
+        this.description = description;
     }
 
     public Integer getDurationSeconds() {

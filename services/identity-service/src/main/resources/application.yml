@@ -4,6 +4,8 @@ server:
 spring:
   application:
     name: identity-service
+  profiles:
+    default: dev
   config:
     import: optional:configserver:http://localhost:8888
   lifecycle:
@@ -26,6 +28,8 @@ spring:
     locations: classpath:db/migration
     # Existing DB had tables before Flyway; create flyway_schema_history and run pending migrations.
     baseline-on-migrate: true
+    # If V20260411194300 was applied on an env before we added V20260411180000 (create users), allow one-time out-of-order apply.
+    out-of-order: true
   jpa:
     hibernate:
       # Flyway owns additive schema changes; Hibernate updates entity-owned tables for dev.

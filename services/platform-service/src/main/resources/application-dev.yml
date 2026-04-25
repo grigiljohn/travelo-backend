@@ -1,0 +1,6 @@
+# Profile: dev (default)
+management:
+  metrics:
+    tags:
+      service: platform-service
+      environment: dev

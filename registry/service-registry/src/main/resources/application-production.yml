@@ -1,0 +1,19 @@
+# Profile: production
+spring:
+  config:
+    import: ${SPRING_CONFIG_IMPORT:optional:configserver:http://localhost:8888}
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:http://localhost:8761/eureka/}
+  instance:
+    prefer-ip-address: true
+    hostname: ${EUREKA_INSTANCE_HOSTNAME:}
+management:
+  endpoint:
+    health:
+      show-details: when-authorized
+  metrics:
+    tags:
+      service: service-registry
+      environment: production

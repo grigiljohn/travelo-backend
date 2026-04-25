@@ -58,6 +58,30 @@ public class User {
     @Column(name = "is_private", nullable = false)
     private Boolean isPrivate = Boolean.FALSE;
 
+    @Column(name = "location_permission_granted", nullable = false)
+    private Boolean locationPermissionGranted = Boolean.FALSE;
+
+    @Column(name = "location_required", nullable = false)
+    private Boolean locationRequired = Boolean.TRUE;
+
+    @Column(name = "current_latitude")
+    private Double currentLatitude;
+
+    @Column(name = "current_longitude")
+    private Double currentLongitude;
+
+    @Column(name = "current_location_label", length = 255)
+    private String currentLocationLabel;
+
+    @Column(name = "current_city", length = 120)
+    private String currentCity;
+
+    @Column(name = "current_country", length = 120)
+    private String currentCountry;
+
+    @Column(name = "current_location_updated_at")
+    private OffsetDateTime currentLocationUpdatedAt;
+
     // Constructors
     public User() {
     }
@@ -184,6 +208,70 @@ public class User {
         this.isPrivate = isPrivate != null ? isPrivate : Boolean.FALSE;
     }
 
+    public Boolean getLocationPermissionGranted() {
+        return locationPermissionGranted;
+    }
+
+    public void setLocationPermissionGranted(Boolean locationPermissionGranted) {
+        this.locationPermissionGranted = locationPermissionGranted != null ? locationPermissionGranted : Boolean.FALSE;
+    }
+
+    public Boolean getLocationRequired() {
+        return locationRequired;
+    }
+
+    public void setLocationRequired(Boolean locationRequired) {
+        this.locationRequired = locationRequired != null ? locationRequired : Boolean.TRUE;
+    }
+
+    public Double getCurrentLatitude() {
+        return currentLatitude;
+    }
+
+    public void setCurrentLatitude(Double currentLatitude) {
+        this.currentLatitude = currentLatitude;
+    }
+
+    public Double getCurrentLongitude() {
+        return currentLongitude;
+    }
+
+    public void setCurrentLongitude(Double currentLongitude) {
+        this.currentLongitude = currentLongitude;
+    }
+
+    public String getCurrentLocationLabel() {
+        return currentLocationLabel;
+    }
+
+    public void setCurrentLocationLabel(String currentLocationLabel) {
+        this.currentLocationLabel = currentLocationLabel;
+    }
+
+    public String getCurrentCity() {
+        return currentCity;
+    }
+
+    public void setCurrentCity(String currentCity) {
+        this.currentCity = currentCity;
+    }
+
+    public String getCurrentCountry() {
+        return currentCountry;
+    }
+
+    public void setCurrentCountry(String currentCountry) {
+        this.currentCountry = currentCountry;
+    }
+
+    public OffsetDateTime getCurrentLocationUpdatedAt() {
+        return currentLocationUpdatedAt;
+    }
+
+    public void setCurrentLocationUpdatedAt(OffsetDateTime currentLocationUpdatedAt) {
+        this.currentLocationUpdatedAt = currentLocationUpdatedAt;
+    }
+
     @Override
     public String toString() {
         return "User{" +
@@ -194,6 +282,8 @@ public class User {
                 ", mobile='" + mobile + '\'' +
                 ", isEmailVerified=" + isEmailVerified +
                 ", isPrivate=" + isPrivate +
+                ", locationPermissionGranted=" + locationPermissionGranted +
+                ", locationRequired=" + locationRequired +
                 ", createdAt=" + createdAt +
                 ", updatedAt=" + updatedAt +
                 ", lastLoginAt=" + lastLoginAt +

@@ -1,0 +1,6 @@
+# Profile: dev (default) — travelo_messaging, Kafka/FCM as configured locally
+management:
+  metrics:
+    tags:
+      service: realtime-service
+      environment: dev

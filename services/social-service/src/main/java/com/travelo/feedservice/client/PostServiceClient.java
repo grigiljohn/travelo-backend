@@ -46,9 +46,10 @@ public class PostServiceClient {
     /**
      * Fetch posts from post-service.
      */
-    public List<PostDto> getPosts(int page, int limit, String mood, List<String> authorUserIds) {
-        logger.debug("Fetching posts - page: {}, limit: {}, mood: {}, authorCount={}",
-                page, limit, mood, authorUserIds == null ? 0 : authorUserIds.size());
+    public List<PostDto> getPosts(
+            int page, int limit, String mood, List<String> authorUserIds, String viewerUserId) {
+        logger.debug("Fetching posts - page: {}, limit: {}, mood: {}, authorCount={}, viewer={}",
+                page, limit, mood, authorUserIds == null ? 0 : authorUserIds.size(), viewerUserId);
         if (shouldServeAlwaysMock()) {
             feedMetricsService.recordFallbackUsed("post-service", "always");
             return buildMockPosts(limit);
@@ -69,6 +70,9 @@ public class PostServiceClient {
                         }
                         for (String aid : authors) {
                             builder = builder.queryParam("author_ids", aid);
+                        }
+                        if (viewerUserId != null && !viewerUserId.isBlank()) {
+                            builder = builder.queryParam("viewer_id", viewerUserId);
                         }
                         return builder.build();
                     });
@@ -101,6 +105,10 @@ public class PostServiceClient {
             }
             throw e;
         }
+    }
+
+    public List<PostDto> getPosts(int page, int limit, String mood, List<String> authorUserIds) {
+        return getPosts(page, limit, mood, authorUserIds, null);
     }
 
     private boolean shouldServeAlwaysMock() {

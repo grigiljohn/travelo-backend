@@ -46,6 +46,9 @@ public class PostDto {
     
     @JsonProperty("is_saved")
     private Boolean isSaved;
+
+    @JsonProperty("is_dreamed")
+    private Boolean isDreamed;
     
     @JsonProperty("is_verified")
     private Boolean isVerified;
@@ -107,6 +110,8 @@ public class PostDto {
     public void setIsFollowing(Boolean isFollowing) { this.isFollowing = isFollowing; }
     public Boolean getIsSaved() { return isSaved; }
     public void setIsSaved(Boolean isSaved) { this.isSaved = isSaved; }
+    public Boolean getIsDreamed() { return isDreamed; }
+    public void setIsDreamed(Boolean isDreamed) { this.isDreamed = isDreamed; }
     public Boolean getIsVerified() { return isVerified; }
     public void setIsVerified(Boolean isVerified) { this.isVerified = isVerified; }
     public String getCreatedAt() { return createdAt; }

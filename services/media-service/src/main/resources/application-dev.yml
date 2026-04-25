@@ -1,0 +1,6 @@
+# Profile: dev (default) — local storage or dev S3; reel progress in-memory
+management:
+  metrics:
+    tags:
+      service: media-service
+      environment: dev
